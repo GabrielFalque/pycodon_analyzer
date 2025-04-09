@@ -1,0 +1,71 @@
+# pyproject.toml
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# --- Updated Project Metadata ---
+name = "pycodon_analyzer" # Changed name
+version = "0.3.0" # Incremented version
+authors = [
+  { name="Gabriel Falque", email="gabfalque@hotmail.fr" },
+]
+description = "Comprehensive codon usage analysis tool for pre-extracted gene alignments." 
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+]
+keywords = [
+    "bioinformatics", "codon usage", "RSCU", "CAI", "ENC", "RCDI",
+    "GC content", "GRAVY", "aromaticity", "genomics", "sequence analysis",
+    "correspondence analysis", "bioinformatics tools" # Added keywords
+    ]
+
+# --- Dependencies ---
+dependencies = [
+    "biopython>=1.79",
+    "pandas>=1.3.0",
+    "matplotlib>=3.4.0",
+    "seaborn>=0.11.0",
+    "numpy>=1.21.0",
+    "scikit-learn>=1.0", # Needed by prince? Check prince dependencies if issue
+    "prince>=0.12.1",    # For CA
+    "scipy>=1.6.0",      # Added for statistical tests
+    # 'importlib-resources; python_version<"3.9"', # Usually handled by setuptools now
+]
+
+# Optional dependencies for development
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "build",
+    "twine",
+]
+
+# --- Entry point ---
+[project.scripts]
+# Command name = package_name.module:function
+pycodon_analyzer = "pycodon_analyzer.cli:main" # Changed command and package name
+
+# --- Setuptools configuration ---
+[tool.setuptools.packages.find]
+# Automatically find packages within the 'src' directory
+where = ["src"]
+
+[tool.setuptools.package-data]
+# Target the package 'pycodon_analyzer' to include data files
+# Ensure this matches the directory name inside 'src'
+"pycodon_analyzer" = ["data/*.csv", "data/*.tsv"] # Include data files from src/pycodon_analyzer/data/

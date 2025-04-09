@@ -1,0 +1,10 @@
+>Seq1
+ATGCGTATGCGTATGCGTNNN---TAG
+>Seq2_short
+ATGCGTTGA
+>Seq3_nostop
+ATGCGTCGCATGCGTCGCATGCGTCGC
+>Seq4_only_gap
+---------
+>Seq5_only_N
+NNNNNNNNN

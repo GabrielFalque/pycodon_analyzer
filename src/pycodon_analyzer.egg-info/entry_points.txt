@@ -1,0 +1,2 @@
+[console_scripts]
+pycodon_analyzer = pycodon_analyzer.cli:main

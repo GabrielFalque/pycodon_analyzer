@@ -1,0 +1,11 @@
+# requirements.txt
+biopython>=1.79
+pandas>=1.3.0
+matplotlib>=3.4.0
+seaborn>=0.11.0
+numpy>=1.21.0
+# scikit-learn>=1.0 # Often a dependency of prince, list if needed directly
+prince>=0.12.1
+scipy>=1.6.0 # Added for statistical tests
+# Add importlib-resources for Python < 3.9 if needed explicitly:
+# importlib-resources; python_version<"3.9"
