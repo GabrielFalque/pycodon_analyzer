@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+import logging
 
 # Adjust import based on how pytest is run (from root or tests dir)
 try:
@@ -87,6 +88,34 @@ def test_clean_filter_length_checks():
     assert cleaned_ids == {"ok", "short3"}
     assert str([r.seq for r in cleaned if r.id=='ok'][0]) == "CGT"
     assert str([r.seq for r in cleaned if r.id=='short3'][0]) == "CCC"
+
+# --- Test logging in clean_and_filter_sequences ---
+def test_clean_filter_logging_removed_sequences(simple_seq_records, caplog):
+    """Test that info log is generated when sequences are removed."""
+    # This fixture has sequences that WILL be removed
+    caplog.set_level(logging.INFO) # Ensure INFO messages are captured
+    # SeqC (N%), SeqD (short after clean), SeqG (gaps), SeqH (empty), SeqI (N%) should be removed by default clean
+    # Count how many are expected to be removed based on previous tests/logic
+    # Let's re-verify:
+    # A: ATG CGT AGA --- -> CGTAGA (OK)
+    # B: ATG CCC TAA CCC -> CCCTAA (len 6) -> CCC (OK)
+    # C: ATG AAA GGG NNN --- TGA -> AAAGGGNNN (N=33% > 15%) -> REMOVED
+    # D: ATG TTT --- -> TTT (len 3) -> OK (SeqD_short) -- ERROR IN PREVIOUS ANALYSIS, length 3 is OK after clean!
+    # E: ATG CGA TAG -> CGA (len 3) -> OK (SeqE_nostop_ok) -- ERROR IN PREVIOUS ANALYSIS, stop TAG is removed.
+    # F: ACG---ACG -> ACGACG (len 6) -> OK (SeqF_no_start)
+    # G: --- -> REMOVED (empty after gap)
+    # H: "" -> REMOVED (empty)
+    # I: NNN... -> REMOVED (100% N)
+    # Original expected removed: C, G, H, I -> 4 sequences.
+    # Let's re-run clean and check length/ids of output from original test
+    # Cleaned IDs expected: {"SeqA", "SeqB", "SeqD_short", "SeqE_nostop_ok", "SeqF_no_start"} -> 5 survive, 4 removed (C, G, H, I)
+    initial_count = len(simple_seq_records)
+    expected_removed = 4
+
+    _ = utils.clean_and_filter_sequences(simple_seq_records, max_ambiguity_pct=15.0)
+
+    assert f"Removed {expected_removed} out of {initial_count} sequences during cleaning/filtering." in caplog.text
+    assert any(record.levelno == logging.INFO for record in caplog.records)
 
 
 # --- Tests for reference loading ---
@@ -171,5 +200,72 @@ def test_load_reference_bad_file(tmp_path, standard_genetic_code_dict):
     ref_file_bad = tmp_path / "dummy_ref_bad.tsv"
     ref_file_bad.write_text(ref_content_bad)
     assert utils.load_reference_usage(str(ref_file_bad), standard_genetic_code_dict, 1) is None
+
+# --- Test error handling and logging in load_reference_usage ---
+def test_load_reference_file_not_found(caplog, standard_genetic_code_dict):
+    """Test behavior when reference file does not exist."""
+    caplog.set_level(logging.ERROR)
+    filepath = "nonexistent_file.tsv"
+    result = utils.load_reference_usage(filepath, standard_genetic_code_dict, 1)
+    assert result is None
+    assert f"Reference file not found: {filepath}" in caplog.text
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+def test_load_reference_bad_format(tmp_path, caplog, standard_genetic_code_dict):
+    """Test loading a file that cannot be parsed as CSV/TSV."""
+    caplog.set_level(logging.DEBUG)
+    ref_file_bad_format = tmp_path / "dummy_ref_bad_format.txt"
+    # Content that will likely cause ParserError
+    ref_file_bad_format.write_text('Codon,Frequency\nAAA,"0.5\nBBB,0.4')
+
+    result = utils.load_reference_usage(str(ref_file_bad_format), standard_genetic_code_dict, 1)
+    assert result is None
+
+    assert "ParserError reading with" in caplog.text # Vérifier le log DEBUG de tentative
+
+    # Check for a relevant error message (might vary slightly depending on pandas version)
+    assert "Could not parse reference file" in caplog.text 
+    assert any(record.levelno == logging.ERROR for record in caplog.records if "Could not parse reference file" in record.message)
+    # Check that error "Could not find a suitable value column" is NOT logged here
+    assert "Could not find a suitable value column" not in caplog.text
+
+
+def test_load_reference_missing_codon_col(tmp_path, caplog, standard_genetic_code_dict):
+    """Test loading a file missing the 'Codon' column."""
+    caplog.set_level(logging.ERROR)
+    ref_content = "Header1\tFrequency\nVal1\t0.6\nVal2\t0.4"
+    ref_file = tmp_path / "missing_codon.tsv"
+    ref_file.write_text(ref_content)
+    result = utils.load_reference_usage(str(ref_file), standard_genetic_code_dict, 1)
+    assert result is None
+    assert "Could not find a 'Codon' column" in caplog.text
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+def test_load_reference_missing_value_col(tmp_path, caplog, standard_genetic_code_dict):
+    """Test loading a file missing a recognizable value column (Freq, Count, RSCU)."""
+    caplog.set_level(logging.ERROR)
+    ref_content = "Codon\tAminoAcid\nAAA\tK\nAAG\tK"
+    ref_file = tmp_path / "missing_value.tsv"
+    ref_file.write_text(ref_content)
+    result = utils.load_reference_usage(str(ref_file), standard_genetic_code_dict, 1)
+    assert result is None
+    assert "Could not find a suitable value column" in caplog.text
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+def test_load_reference_non_numeric_value(tmp_path, caplog, standard_genetic_code_dict):
+    """Test loading a file with non-numeric values in the value column."""
+    caplog.set_level(logging.WARNING) # Expecting a warning about dropped rows
+    ref_content = "Codon\tFrequency\nAAA\tHigh\nAAG\t0.4\nCCC\tLow"
+    ref_file = tmp_path / "non_numeric.tsv"
+    ref_file.write_text(ref_content)
+    result = utils.load_reference_usage(str(ref_file), standard_genetic_code_dict, 1)
+    # Should still return a result for the valid row 'AAG'
+    assert result is not None
+    assert 'AAG' in result.index
+    assert 'AAA' not in result.index # Should be dropped
+    assert 'CCC' not in result.index # Should be dropped
+    assert "Dropped" in caplog.text and "rows from reference file due to non-numeric values" in caplog.text
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+
 
 # --- Add tests for get_genetic_code, get_synonymous_codons if needed ---

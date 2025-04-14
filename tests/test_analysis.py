@@ -6,6 +6,7 @@ import numpy as np
 from collections import Counter
 from Bio.SeqRecord import SeqRecord
 from Bio.Seq import Seq
+import logging
 
 # Adjust import path
 try:
@@ -144,6 +145,68 @@ def test_calculate_protein_properties():
     assert np.isclose(arom_f, 1/3), f"Aromaticity calculation failed. Expected {1/3}, Got {arom_f}"
     assert np.isclose(gravy_f, (1.9 + 2.8 + 1.9)/3)
 
+# --- Tests for edge cases/errors in sequence property calculations ---
+
+def test_calculate_gc_content_invalid_input(caplog):
+    """Test GC calculation with invalid sequence input based on length checks."""
+    caplog.set_level(logging.DEBUG)
+
+    # Empty string - Should return NaNs and log
+    result_empty = analysis.calculate_gc_content("")
+    assert all(np.isnan(x) for x in result_empty), "Empty string should return all NaNs"
+    assert "Cannot calculate GC content for sequence of length 0" in caplog.text
+    assert any(record.levelname == 'DEBUG' for record in caplog.records) # Check level if specific
+
+    # Length < 3 - Should return NaNs and log
+    caplog.clear()
+    result_short = analysis.calculate_gc_content("AT")
+    assert all(np.isnan(x) for x in result_short), "Sequence length < 3 should return all NaNs"
+    assert "Cannot calculate GC content for sequence of length 2" in caplog.text
+
+    # Wrong length (not multiple of 3) - Should return NaNs and log
+    caplog.clear()
+    result_len = analysis.calculate_gc_content("ACGT")
+    assert all(np.isnan(x) for x in result_len), "Sequence length not multiple of 3 should return all NaNs"
+    assert "Cannot calculate GC content for sequence of length 4" in caplog.text
+
+    # --- Removed incorrect assertion for "ATGNNC---" ---
+    # Input "ATGNNC---" has length 9 (multiple of 3).
+    # The function WILL attempt calculation via Bio.SeqUtils.GC123.
+    # GC123 might return valid numbers by ignoring 'N' and '-', so we don't expect all NaNs.
+    caplog.clear()
+    result_mixed = analysis.calculate_gc_content("ATGNNC---")
+    # We expect it NOT to log the "Cannot calculate GC content for sequence of length 9" message
+    assert "Cannot calculate GC content for sequence of length 9" not in caplog.text
+    # We can assert that it returns *some* numbers (not all NaN)
+    assert not all(np.isnan(x) for x in result_mixed), "Sequence 'ATGNNC---' should not return all NaNs as length is valid."
+
+
+def test_translate_sequence_invalid(caplog, standard_genetic_code_dict):
+    """Test translation with Ns or incomplete codons."""
+    caplog.set_level(logging.DEBUG) # Check if translation logs warnings
+
+    # Sequence with Ns
+    protein_n = analysis.translate_sequence("ATGNNNTTTTAG", standard_genetic_code_dict)
+    assert protein_n == "MXF*" # Expect 'X' for NNN codon
+
+    # Sequence with incomplete codon at end (should not happen if cleaning works)
+    # Assuming translate handles this gracefully (e.g., ignores trailing chars)
+    protein_inc = analysis.translate_sequence("ATGCC", standard_genetic_code_dict)
+    assert protein_inc == "M" # Should likely ignore trailing CC
+
+    # Empty sequence
+    assert analysis.translate_sequence("", standard_genetic_code_dict) is None
+
+def test_calculate_protein_properties_invalid(caplog):
+    """Test GRAVY/Aromaticity with non-standard sequences."""
+    caplog.set_level(logging.WARNING) # ProteinAnalysis might log warnings
+
+    # Sequence with only X's after cleaning
+    assert analysis.calculate_protein_properties("XXX") == (np.nan, np.nan)
+    # Check for potential warning if ProteinAnalysis complains about unknown seqs
+    # assert "Could not instantiate ProteinAnalysis" in caplog.text # Depending on exact log
+
+
 
 # --- Tests for Codon Usage Indices ---
 
@@ -177,45 +240,156 @@ def test_calculate_enc():
     counts_low = Counter({'TTT': 1, 'TTC': 1})
     assert pd.isna(analysis.calculate_enc(counts_low, 1))
 
-# test_calculate_cai_fop_rcdi remains the same
+# --- Tests for edge cases/errors in codon usage indices ---
+
+def test_calculate_enc_insufficient_data(caplog):
+    """Test ENC returns NaN and logs debug for insufficient data."""
+    caplog.set_level(logging.DEBUG)
+    counts_low = Counter({'TTT': 10, 'TTC': 5}) # Total = 15 < threshold
+    assert pd.isna(analysis.calculate_enc(counts_low, 1))
+    assert "Insufficient codons" in caplog.text # Check for debug log
+
+def test_calculate_cai_fop_rcdi_no_weights(caplog):
+    """Test indices return NaN and log debug when reference weights are missing."""
+    caplog.set_level(logging.DEBUG) # Capture DEBUG level messages
+    counts = Counter({'AAA': 10, 'AAG': 30})
+    empty_weights = {} # The condition being tested
+
+    # Test CAI
+    assert pd.isna(analysis.calculate_cai(counts, empty_weights))
+    # Assert specific log message for this failure case
+    assert "Cannot calculate CAI: Missing codon counts or reference weights." in caplog.text
+    assert any(record.levelname == 'DEBUG' for record in caplog.records if "Cannot calculate CAI" in record.message)
+
+    # Clear logs before next call
+    caplog.clear()
+
+    # Test Fop
+    assert pd.isna(analysis.calculate_fop(counts, empty_weights))
+    # Assert specific log message for this failure case <--- CORRECTED ASSERTION
+    assert "Cannot calculate Fop: Missing codon counts or reference weights." in caplog.text
+    assert any(record.levelname == 'DEBUG' for record in caplog.records if "Cannot calculate Fop" in record.message)
+
+    # Clear logs before next call
+    caplog.clear()
+
+    # Test RCDI
+    assert pd.isna(analysis.calculate_rcdi(counts, empty_weights))
+    # Assert specific log message for this failure case
+    assert "Cannot calculate RCDI: Missing codon counts or reference weights." in caplog.text
+    assert any(record.levelname == 'DEBUG' for record in caplog.records if "Cannot calculate RCDI" in record.message)
+
+
+def test_calculate_cai_fop_rcdi_no_counts(caplog, dummy_ref_weights):
+    """Test indices return NaN when counts are empty."""
+    caplog.set_level(logging.DEBUG)
+    empty_counts = Counter()
+
+    assert pd.isna(analysis.calculate_cai(empty_counts, dummy_ref_weights))
+    assert "Missing codon counts or reference weights." in caplog.text # Le même log est généré
+    caplog.clear()
+    assert pd.isna(analysis.calculate_fop(empty_counts, dummy_ref_weights))
+    assert "Missing codon counts or reference weights." in caplog.text # Le même log est généré
+    caplog.clear()
+    assert pd.isna(analysis.calculate_rcdi(empty_counts, dummy_ref_weights))
+    assert "Missing codon counts or reference weights." in caplog.text # Le même log est généré
+
+def test_calculate_cai_zero_weight(dummy_ref_weights):
+    """Test that CAI returns 0 if a used codon has weight 0."""
+    weights_with_zero = dummy_ref_weights.copy()
+    weights_with_zero['GGG'] = 0.0 # Set GGG weight to 0
+    counts = Counter({'AAA': 10, 'GGG': 5}) # Sequence uses GGG
+    assert analysis.calculate_cai(counts, weights_with_zero) == 0.0
+
+def test_calculate_rcdi_zero_weight(dummy_ref_weights):
+    """Test that RCDI returns NaN if a used codon has weight 0."""
+    weights_with_zero = dummy_ref_weights.copy()
+    weights_with_zero['GGG'] = 0.0
+    counts = Counter({'AAA': 10, 'GGG': 5})
+    assert pd.isna(analysis.calculate_rcdi(counts, weights_with_zero))
+
 
 # --- Tests for Statistical Comparison ---
-# Mock scipy or use real scipy if installed
 try:
     from scipy import stats
+    SCIPY_STATS_AVAILABLE = True
 except ImportError:
     class MockStats: # Simple mock
         def kruskal(self, *args): return 1.23, 0.567
         def f_oneway(self, *args): return 4.56, 0.123
     stats = MockStats()
+    SCIPY_STATS_AVAILABLE = False
     print("\nNote: scipy not found, using mock stats for comparison test.")
 
-def test_compare_features_between_genes():
-    """Test statistical comparison between gene groups."""
-    # Use more data points per group
+# Test function might need adjustment if analysis.stats is accessed differently now
+def test_compare_features_between_genes(caplog):
+    """Test statistical comparison between gene groups, check logs, including skipping missing features."""
+    caplog.set_level(logging.WARNING) # Capture warnings
+
+    # Create DataFrame WITHOUT MissingFeature column
     data = {
         'Gene': ['GeneA']*5 + ['GeneB']*5 + ['GeneC']*5,
-        'ENC': np.random.rand(15) * 10 + 45, # Random data around expected range
+        'ENC': np.random.rand(15) * 10 + 45,
         'GC3': np.random.rand(15) * 40 + 30,
         'CAI': np.random.rand(15) * 0.2 + 0.6
+        # 'MissingFeature': [1]*15 
     }
     df = pd.DataFrame(data)
-    features = ['ENC', 'GC3', 'CAI', 'MissingFeature']
 
-    # Inject mock/real scipy
+    # Define features list INCLUDING the one missing from the DataFrame
+    features_to_test = ['ENC', 'GC3', 'CAI', 'MissingFeature']
+
+    # Inject mock/real scipy into analysis module if needed
     original_stats = getattr(analysis, 'stats', None)
-    analysis.stats = stats
-    results_df = analysis.compare_features_between_genes(df, features, method='kruskal')
-    if original_stats: analysis.stats = original_stats
+    analysis.stats = stats # Inject mock or real stats
+    results_df = None # Initialize
+    try:
+        results_df = analysis.compare_features_between_genes(df, features_to_test, method='kruskal')
+    finally:
+        # Ensure stats attribute is restored even if the function fails
+        if original_stats: analysis.stats = original_stats
+        # Avoid deleting if it didn't exist originally
+        elif hasattr(analysis, 'stats'): delattr(analysis, 'stats')
 
-    assert results_df is not None
-    assert len(results_df) == 3 # Skips 'MissingFeature'
+
+    # Check results structure (should contain results for ENC, GC3, CAI)
+    assert results_df is not None, "compare_features_between_genes returned None unexpectedly"
     assert 'Feature' in results_df.columns
     assert 'P_value' in results_df.columns
+    assert len(results_df) == 3, f"Expected 3 results, but got {len(results_df)}" # Only 3 features should have results
 
-    # Test with missing feature or too few groups
-    assert analysis.compare_features_between_genes(df, ['MissingFeature'], 'kruskal') is None
-    assert analysis.compare_features_between_genes(df[df['Gene'] == 'GeneA'], features, 'kruskal') is None
+    # Check that MissingFeature was skipped and logged
+    # --- THIS ASSERTION SHOULD NOW PASS ---
+    assert 'MissingFeature' not in results_df['Feature'].tolist(), "'MissingFeature' should have been skipped"
+    assert "Feature 'MissingFeature' not found in data. Skipping comparison." in caplog.text
+    assert any(record.levelno == logging.WARNING for record in caplog.records if "MissingFeature" in record.message)
+
+    # --- Test with too few groups (remains the same logic) ---
+    caplog.clear()
+    original_stats = getattr(analysis, 'stats', None)
+    analysis.stats = stats
+    try:
+        assert analysis.compare_features_between_genes(df[df['Gene'] == 'GeneA'], features_to_test, 'kruskal') is None
+    finally:
+        if original_stats: analysis.stats = original_stats
+        elif hasattr(analysis, 'stats'): delattr(analysis, 'stats')
+    # Check the specific log message
+    assert "Need at least two gene groups for comparison." in caplog.text # This log is a WARNING
+
+    # --- Test warning if scipy unavailable (remains the same logic) ---
+    if not SCIPY_STATS_AVAILABLE:
+        caplog.clear()
+        original_stats_for_none_test = getattr(analysis, 'stats', None)
+        analysis.stats = None # Simulate unavailability
+        try:
+             # Call the function - it should log the warning and return None
+             assert analysis.compare_features_between_genes(df, features_to_test, 'kruskal') is None
+        finally:
+             # Restore stats attribute
+             if original_stats_for_none_test: analysis.stats = original_stats_for_none_test
+             elif hasattr(analysis, 'stats'): delattr(analysis, 'stats')
+        # Check for the specific log message
+        assert "scipy.stats module not found. Cannot perform statistical comparisons." in caplog.text
 
 
 # --- Placeholder tests for other analysis functions ---

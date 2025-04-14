@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 [project]
 # --- Updated Project Metadata ---
 name = "pycodon_analyzer" # Changed name
-version = "0.3.0" # Incremented version
+version = "0.4.0" # Incremented version
 authors = [
   { name="Gabriel Falque", email="gabfalque@hotmail.fr" },
 ]
@@ -27,11 +27,13 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Environment :: Console",
     "Intended Audience :: Science/Research",
+    "Environment :: Console",
+    "Natural Language :: English",
 ]
 keywords = [
     "bioinformatics", "codon usage", "RSCU", "CAI", "ENC", "RCDI",
     "GC content", "GRAVY", "aromaticity", "genomics", "sequence analysis",
-    "correspondence analysis", "bioinformatics tools" # Added keywords
+    "correspondence analysis", "bioinformatics tools"
     ]
 
 # --- Dependencies ---
@@ -44,7 +46,8 @@ dependencies = [
     "scikit-learn>=1.0", # Needed by prince? Check prince dependencies if issue
     "prince>=0.12.1",    # For CA
     "scipy>=1.6.0",      # Added for statistical tests
-    # 'importlib-resources; python_version<"3.9"', # Usually handled by setuptools now
+    "adjustText >= 0.8",
+    # 'importlib-resources >= 1.0; python_version<"3.9"', # Usually handled by setuptools now
 ]
 
 # Optional dependencies for development
@@ -53,6 +56,8 @@ dev = [
     "pytest>=7.0",
     "build",
     "twine",
+    "mypy",
+    "ruff",
 ]
 
 # --- Entry point ---

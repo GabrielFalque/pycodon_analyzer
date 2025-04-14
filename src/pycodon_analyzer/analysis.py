@@ -1,4 +1,5 @@
 # src/pycodon_analyzer/analysis.py
+# -*- coding: utf-8 -*-
 
 # Copyright (c) 2025 Gabriel Falque
 # Distributed under the terms of the MIT License.
@@ -9,83 +10,97 @@ Core analysis functions for codon usage and sequence properties.
 """
 import itertools
 import os
-from collections import Counter
 import sys
-import pandas as pd # type: ignore
-import numpy as np # type: ignore
+import logging # <-- Import logging
 import math # For log, exp in CAI, etc.
+from collections import Counter
+from typing import List, Dict, Optional, Set, Tuple, Any, Union # <-- Import typing helpers
+
+import pandas as pd
+import numpy as np
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
 from Bio.SeqUtils import GC123, molecular_weight # type: ignore # Use BioPython's GC utils
 from Bio.SeqUtils.ProtParam import ProteinAnalysis # type: ignore # For GRAVY, Aromaticity
 
-# Import prince for CA
+# Import prince for CA - handle optional dependency for typing
 try:
-    import prince # type: ignore
+    import prince
+    PrinceCA = prince.CA # Alias for typing if available
 except ImportError:
-    prince = None # Handle optional dependency
+    prince = None
+    PrinceCA = Any # Fallback type if prince not installed
+
+# Import scipy.stats - handle optional dependency for typing
 try:
     from scipy import stats
+    ScipyStats = Any # Or be more specific if needed, e.g., type(stats)
 except ImportError:
-    stats = None # Handle optional dependency if making scipy optional
-from functools import partial # Added for passing args with map
+    stats = None
+    ScipyStats = Any
+
+from functools import partial
 
 # --- Local modules ---
 try:
     from .utils import (get_genetic_code, get_synonymous_codons,
                         VALID_CODON_CHARS, KYTE_DOOLITTLE_HYDROPATHY)
-except ImportError: # Fallback for potential import issues during testing?
-    print("Error importing from .utils, check package structure/installation.", file=sys.stderr)
-    # Define fallbacks if absolutely needed for basic functionality without utils
-    STANDARD_GENETIC_CODE = {} # Placeholder
-    VALID_CODON_CHARS = set('ATCG')
-    KYTE_DOOLITTLE_HYDROPATHY = {}
-    def get_genetic_code(code_id=1): return STANDARD_GENETIC_CODE
-    def get_synonymous_codons(gc): return {}
+except ImportError as e:
+    # Use logger here if possible, but it might not be configured yet
+    print(f"ERROR: Failed importing from .utils: {e}. Check package structure/installation.", file=sys.stderr)
+    # Define minimal fallbacks if needed for the script to load, though functionality will be broken
+    STANDARD_GENETIC_CODE: Dict[str, str] = {}
+    VALID_CODON_CHARS: set[str] = set('ATCG')
+    KYTE_DOOLITTLE_HYDROPATHY: Dict[str, float] = {}
+    def get_genetic_code(code_id: int = 1) -> Dict[str, str]: return STANDARD_GENETIC_CODE
+    def get_synonymous_codons(gc: Dict[str, str]) -> Dict[str, List[str]]: return {}
+    # Exit if core utilities cannot be loaded? Or let subsequent code fail?
+    # sys.exit("Core utilities could not be imported.")
 
-# --- Multiprocessing ---
-try:
-    import multiprocessing as mp
-    from functools import partial
-except ImportError:
-    mp = None
-    partial = None
-    print("Warning: multiprocessing module not found, analysis will run sequentially.", file=sys.stderr)
+
+# --- Configure logging for this module ---
+logger = logging.getLogger(__name__)
 
 
 # === Nucleotide and Dinucleotide Frequency Calculations ===
 
-def calculate_relative_dinucleotide_abundance(nucl_freqs, dinucl_freqs):
+def calculate_relative_dinucleotide_abundance(
+    nucl_freqs: Dict[str, float],
+    dinucl_freqs: Dict[str, float]
+) -> Dict[str, float]:
     """
     Calculates the relative dinucleotide abundance (Observed/Expected ratio).
 
     Expected frequency Exp(XY) = Freq(X) * Freq(Y).
 
     Args:
-        nucl_freqs (dict): Dictionary mapping nucleotides ('A', 'C', 'G', 'T')
-                           to their frequencies.
-        dinucl_freqs (dict): Dictionary mapping the 16 dinucleotides (e.g., 'AA')
-                             to their observed frequencies.
+        nucl_freqs (Dict[str, float]): Dictionary mapping nucleotides ('A', 'C', 'G', 'T')
+                                       to their frequencies.
+        dinucl_freqs (Dict[str, float]): Dictionary mapping the 16 dinucleotides (e.g., 'AA')
+                                         to their observed frequencies.
 
     Returns:
-        dict: Dictionary mapping dinucleotides to their O/E ratio.
-              Returns empty dict if input is invalid or calculation fails.
-              Ratio is np.nan if expected frequency is zero but observed is non-zero.
-              Ratio is 1.0 if both observed and expected are zero (or close to zero).
+        Dict[str, float]: Dictionary mapping dinucleotides to their O/E ratio.
+                          Returns empty dict if input is invalid or calculation fails.
+                          Ratio is np.nan if expected frequency is zero but observed is non-zero.
+                          Ratio is 1.0 if both observed and expected are zero (or close to zero).
     """
     if not nucl_freqs or not dinucl_freqs or len(nucl_freqs) != 4:
-        # print("Warning: Invalid input for relative dinucleotide abundance calculation.", file=sys.stderr)
+        logger.warning("Invalid input for relative dinucleotide abundance calculation. Returning empty dict.")
         return {}
 
-    relative_abundance = {}
-    bases = 'ACGT'
-    min_freq_threshold = 1e-9 # Threshold for effectively zero frequency
+    relative_abundance: Dict[str, float] = {}
+    bases: str = 'ACGT'
+    min_freq_threshold: float = 1e-9 # Threshold for effectively zero frequency
 
     for d1, d2 in itertools.product(bases, repeat=2):
-        dinucleotide = d1 + d2
-        observed_freq = dinucl_freqs.get(dinucleotide, 0.0)
-        freq_n1 = nucl_freqs.get(d1, 0.0)
-        freq_n2 = nucl_freqs.get(d2, 0.0)
-        expected_freq = freq_n1 * freq_n2
+        dinucleotide: str = d1 + d2
+        observed_freq: float = dinucl_freqs.get(dinucleotide, 0.0)
+        freq_n1: float = nucl_freqs.get(d1, 0.0)
+        freq_n2: float = nucl_freqs.get(d2, 0.0)
+        expected_freq: float = freq_n1 * freq_n2
 
+        ratio: float
         if expected_freq > min_freq_threshold:
             ratio = observed_freq / expected_freq
         elif observed_freq < min_freq_threshold: # Both effectively zero
@@ -97,620 +112,1032 @@ def calculate_relative_dinucleotide_abundance(nucl_freqs, dinucl_freqs):
 
     return relative_abundance
 
-def calculate_nucleotide_frequencies(sequences: list['SeqRecord']) -> tuple[dict, int]:
-    """Calculates A, T, C, G frequencies across all sequences."""
-    counts = Counter()
-    total_bases = 0
-    for record in sequences:
-        seq_str = str(record.seq) # Assumes already uppercase
-        for base in seq_str:
-             if base in 'ATCG':
-                 counts[base] += 1
-                 total_bases += 1
+def calculate_nucleotide_frequencies(sequences: List[SeqRecord]) -> Tuple[Dict[str, float], int]:
+    """
+    Calculates A, T, C, G frequencies across all provided sequences.
 
-    freqs = {base: counts.get(base, 0) / total_bases if total_bases > 0 else 0.0
-             for base in 'ATCG'}
+    Args:
+        sequences (List[SeqRecord]): List of Biopython SeqRecord objects.
+
+    Returns:
+        Tuple[Dict[str, float], int]: A tuple containing:
+            - Dictionary of nucleotide frequencies {'A': freq_A, ...}.
+            - Total number of valid bases (A, T, C, G) counted.
+    """
+    counts: Counter[str] = Counter()
+    total_bases: int = 0
+    valid_bases: Set[str] = set('ATCG') # Consider only standard bases for frequency
+
+    for record in sequences:
+        try:
+            seq_str: str = str(record.seq) # Assumes already uppercase
+            for base in seq_str:
+                 if base in valid_bases:
+                     counts[base] += 1
+                     total_bases += 1
+        except AttributeError:
+            logger.warning(f"Skipping record with invalid sequence object: ID {record.id}")
+            continue
+
+    freqs: Dict[str, float] = {base: counts.get(base, 0) / total_bases if total_bases > 0 else 0.0
+                               for base in valid_bases}
+    # Ensure all bases are present even if count is 0
+    for base in 'ATCG':
+        if base not in freqs:
+            freqs[base] = 0.0
+
     return freqs, total_bases
 
-def calculate_dinucleotide_frequencies(sequences: list['SeqRecord']) -> tuple[dict, int]:
-    """Calculates frequencies of all 16 dinucleotides."""
-    counts = Counter()
-    total_dinucl = 0
-    bases = 'ATCG'
+def calculate_dinucleotide_frequencies(sequences: List[SeqRecord]) -> Tuple[Dict[str, float], int]:
+    """
+    Calculates frequencies of all 16 possible ATCG dinucleotides.
+
+    Args:
+        sequences (List[SeqRecord]): List of Biopython SeqRecord objects.
+
+    Returns:
+        Tuple[Dict[str, float], int]: A tuple containing:
+            - Dictionary of dinucleotide frequencies {'AA': freq_AA, ...}.
+            - Total number of valid dinucleotides counted.
+    """
+    counts: Counter[str] = Counter()
+    total_dinucl: int = 0
+    bases: str = 'ACGT'
 
     for record in sequences:
-        seq_str = str(record.seq)
-        for i in range(len(seq_str) - 1):
-            dinucl = seq_str[i:i+2]
-            # Only count valid ATCG dinucleotides
-            if dinucl[0] in bases and dinucl[1] in bases:
-                counts[dinucl] += 1
-                total_dinucl += 1
+        try:
+            seq_str: str = str(record.seq)
+            for i in range(len(seq_str) - 1):
+                dinucl: str = seq_str[i:i+2]
+                # Only count valid ATCG dinucleotides
+                if dinucl[0] in bases and dinucl[1] in bases:
+                    counts[dinucl] += 1
+                    total_dinucl += 1
+        except AttributeError:
+            logger.warning(f"Skipping record with invalid sequence object: ID {record.id}")
+            continue
 
-    freqs = {d1+d2: counts.get(d1+d2, 0) / total_dinucl if total_dinucl > 0 else 0.0
-             for d1 in bases for d2 in bases}
+    freqs: Dict[str, float] = {}
+    for d1 in bases:
+        for d2 in bases:
+             dinucl_key = d1 + d2
+             freqs[dinucl_key] = counts.get(dinucl_key, 0) / total_dinucl if total_dinucl > 0 else 0.0
+
     return freqs, total_dinucl
 
 
 # === Codon and Sequence Property Calculations ===
 
-def calculate_gc_content(sequence_str: str) -> tuple:
+# Type alias for the return tuple of calculate_gc_content
+GcContentType = Tuple[float, float, float, float, float]
+
+def calculate_gc_content(sequence_str: str) -> GcContentType:
     """
     Calculates GC, GC1, GC2, GC3, GC12 content for a single DNA sequence string.
-    Uses Bio.SeqUtils.GC123. Assumes input is cleaned (ATCG, no gaps, mult of 3).
+    Uses Bio.SeqUtils.GC123. Assumes input is cleaned (ATCG, no gaps, multiple of 3).
 
-    Returns: tuple: (GC, GC1, GC2, GC3, GC12) as percentages (float), or NaNs.
+    Args:
+        sequence_str (str): The DNA sequence string.
+
+    Returns:
+        GcContentType: Tuple (GC, GC1, GC2, GC3, GC12) as percentages (float).
+                       Returns NaNs if calculation is not possible.
     """
+    # Basic validation of input
     if not sequence_str or len(sequence_str) < 3 or len(sequence_str) % 3 != 0:
-         # Return NaNs if basic conditions not met
-         return (np.nan,) * 5
+         logger.debug(f"Cannot calculate GC content for sequence of length {len(sequence_str)}. Needs multiple of 3.")
+         return (np.nan,) * 5 # Return tuple of NaNs
 
     try:
         # GC123 expects string, returns percentages
         gc1, gc2, gc3, gc_overall = GC123(sequence_str)
+
         # Ensure results are numeric before calculating GC12
-        if pd.isna(gc1) or pd.isna(gc2):
-             gc12 = np.nan
-        else:
-             gc12 = (float(gc1) + float(gc2)) / 2.0
-        # Return as floats, handling potential non-numeric returns from GC123
-        return (
-            float(gc_overall) if pd.notna(gc_overall) else np.nan,
-            float(gc1) if pd.notna(gc1) else np.nan,
-            float(gc2) if pd.notna(gc2) else np.nan,
-            float(gc3) if pd.notna(gc3) else np.nan,
-            gc12 # Already float or nan
-            )
-    except (ZeroDivisionError, ValueError, TypeError, Exception) as e:
-         # Catch errors during GC123 calculation
-         print(f"Warning: Could not calculate GC123 content: {e}. Seq Len: {len(sequence_str)}", file=sys.stderr)
-         # Try calculating overall GC manually as fallback
-         try:
-             gc_overall_manual = (sequence_str.count('G') + sequence_str.count('C')) / len(sequence_str) * 100
-             return (gc_overall_manual, np.nan, np.nan, np.nan, np.nan)
-         except ZeroDivisionError: # Handles empty string case after filtering?
-              return (np.nan,) * 5
+        gc1_f = float(gc1) if pd.notna(gc1) else np.nan
+        gc2_f = float(gc2) if pd.notna(gc2) else np.nan
+        gc3_f = float(gc3) if pd.notna(gc3) else np.nan
+        gc_overall_f = float(gc_overall) if pd.notna(gc_overall) else np.nan
+
+        gc12: float = np.nan
+        if not np.isnan(gc1_f) and not np.isnan(gc2_f):
+             gc12 = (gc1_f + gc2_f) / 2.0
+
+        return (gc_overall_f, gc1_f, gc2_f, gc3_f, gc12)
+
+    except (ZeroDivisionError, ValueError, TypeError) as e:
+         # Catch specific errors during GC123 calculation
+         logger.warning(f"Could not calculate GC123 content for sequence (len {len(sequence_str)}): {e}. Returning NaNs.")
+         return (np.nan,) * 5
+    except Exception as e: # Catch any other unexpected error
+        logger.exception(f"Unexpected error in calculate_gc_content for sequence (len {len(sequence_str)}): {e}")
+        return (np.nan,) * 5
 
 
-def translate_sequence(sequence_str: str, genetic_code: dict) -> str | None:
+def translate_sequence(sequence_str: str, genetic_code: Dict[str, str]) -> Optional[str]:
     """
-    Translates a cleaned DNA sequence string into protein sequence.
+    Translates a cleaned DNA sequence string (assumed multiple of 3) into protein sequence.
 
-    Returns: str or None: Protein sequence string (may include '*'), or None if empty.
+    Args:
+        sequence_str (str): The DNA sequence string.
+        genetic_code (Dict[str, str]): Genetic code dictionary mapping codons to amino acids.
+
+    Returns:
+        Optional[str]: Protein sequence string (may include '*' or 'X'), or None if input is empty.
     """
-    if not sequence_str: return None
+    if not sequence_str:
+        return None
 
-    protein = []
-    seq_len = len(sequence_str)
+    protein: List[str] = []
+    seq_len: int = len(sequence_str)
+    # Calculate the end position for the loop to only include full codons
+    last_full_codon_start: int = seq_len - (seq_len % 3)
 
-    for i in range(0, seq_len, 3): # Assumes length is multiple of 3
-        codon = sequence_str[i:i+3]
-        # Use 'X' for codons not found in the dictionary (e.g., containing 'N' if not filtered)
-        aa = genetic_code.get(codon, 'X')
-        protein.append(aa)
+    try:
+        for i in range(0, last_full_codon_start, 3):
+            codon: str = sequence_str[i:i+3]
+            # Use 'X' for codons not found in the dictionary (e.g., containing 'N')
+            # or if codon somehow isn't 3 chars (shouldn't happen with check before)
+            aa: str = genetic_code.get(codon, 'X')
+            protein.append(aa)
+        return "".join(protein)
+    except Exception as e:
+        logger.exception(f"Error during translation of sequence (len {seq_len}): {e}")
+        return None # Return None if translation fails
 
-    return "".join(protein)
 
+# Type alias for protein property tuple
+ProteinPropType = Tuple[float, float]
 
-def calculate_protein_properties(protein_sequence: str | None) -> tuple:
+def calculate_protein_properties(protein_sequence: Optional[str]) -> ProteinPropType:
     """
     Calculates GRAVY and Aromaticity for a protein sequence string.
-    Handles None input and potential errors from BioPython.
+    Handles None input, stop codons ('*'), and unknown AAs ('X', '?').
 
-    Returns: tuple: (GRAVY, Aromaticity) as floats, or (NaN, NaN).
+    Args:
+        protein_sequence (Optional[str]): The protein sequence string.
+
+    Returns:
+        ProteinPropType: Tuple (GRAVY, Aromaticity) as floats, or (NaN, NaN).
     """
-    if protein_sequence is None or not isinstance(protein_sequence, str):
+    if protein_sequence is None or not isinstance(protein_sequence, str) or not protein_sequence:
         return (np.nan, np.nan)
 
     # Remove potential stop codons ('*') and unknown AAs ('X', '?') before analysis
-    protein_sequence_cleaned = protein_sequence.replace('*', '').replace('X','').replace('?','')
+    # Use regex for potentially more robust cleaning if needed
+    protein_sequence_cleaned: str = protein_sequence.replace('*', '').replace('X','').replace('?','')
     if not protein_sequence_cleaned:
+        logger.debug("Protein sequence empty after removing non-standard AAs/stops.")
         return (np.nan, np.nan)
 
     try:
-        # Use a new ProteinAnalysis object each time
+        # Create a new ProteinAnalysis object each time
         analysed_protein = ProteinAnalysis(protein_sequence_cleaned)
 
+        # Calculate GRAVY
         try:
-             gravy = analysed_protein.gravy()
-             # Ensure float conversion happens correctly
+             gravy: float = analysed_protein.gravy()
+             # Ensure result is float or NaN
              gravy = float(gravy) if pd.notna(gravy) else np.nan
-        except Exception: gravy = np.nan # Catch error during calculation
+        except (ValueError, TypeError, Exception) as gravy_err:
+             logger.debug(f"Could not calculate GRAVY for sequence '{protein_sequence_cleaned[:20]}...': {gravy_err}")
+             gravy = np.nan
 
+        # Calculate Aromaticity
         try:
-             aromaticity = analysed_protein.aromaticity()
+             aromaticity: float = analysed_protein.aromaticity()
              aromaticity = float(aromaticity) if pd.notna(aromaticity) else np.nan
-        except Exception: aromaticity = np.nan
+        except (ValueError, TypeError, Exception) as arom_err:
+             logger.debug(f"Could not calculate aromaticity for sequence '{protein_sequence_cleaned[:20]}...': {arom_err}")
+             aromaticity = np.nan
 
         return (gravy, aromaticity)
-    except (ValueError, KeyError, Exception) as e:
-        # Catch errors during ProteinAnalysis object creation
-        print(f"Warning: Could not instantiate ProteinAnalysis: {e}", file=sys.stderr)
+
+    except (ValueError, KeyError) as e: # Catch specific errors from ProteinAnalysis init
+        logger.warning(f"Could not instantiate ProteinAnalysis for sequence '{protein_sequence_cleaned[:20]}...': {e}")
         return (np.nan, np.nan)
-    
+    except Exception as e: # Catch other unexpected errors
+        logger.exception(f"Unexpected error calculating protein properties for '{protein_sequence_cleaned[:20]}...': {e}")
+        return (np.nan, np.nan)
+
 
 # === Codon Usage Indices ===
 
-# --- Keep RSCU function (maybe rename calculate_aggregate_rscu?) ---
 def calculate_rscu(codon_counts_df: pd.DataFrame, genetic_code_id: int = 1) -> pd.DataFrame:
     """
-    Calculates Relative Synonymous Codon Usage (RSCU).
+    Calculates Relative Synonymous Codon Usage (RSCU) from codon counts.
 
-    Returns: pd.DataFrame with columns ['Codon', 'AminoAcid', 'Count', 'Frequency', 'RSCU'].
+    Args:
+        codon_counts_df (pd.DataFrame): DataFrame with 'Codon' as index and a 'Count' column.
+        genetic_code_id (int): NCBI genetic code ID. Default is 1.
+
+    Returns:
+        pd.DataFrame: DataFrame with columns ['Codon', 'AminoAcid', 'Count', 'Frequency', 'RSCU'].
+                      Returns an empty DataFrame if input is invalid or calculation fails.
     """
-    output_cols = ['Codon', 'AminoAcid', 'Count', 'Frequency', 'RSCU']
+    output_cols: List[str] = ['Codon', 'AminoAcid', 'Count', 'Frequency', 'RSCU']
+    empty_df = pd.DataFrame(columns=output_cols) # DataFrame to return on error
+
     # Input validation
     if not isinstance(codon_counts_df, pd.DataFrame) or 'Count' not in codon_counts_df.columns:
-        # print("Warning: Invalid input for calculate_rscu.", file=sys.stderr)
-        return pd.DataFrame(columns=output_cols)
+        logger.warning("Invalid input for calculate_rscu: Input must be a DataFrame with a 'Count' column.")
+        return empty_df
     if codon_counts_df.index.name != 'Codon':
-        if 'Codon' in codon_counts_df.columns: codon_counts_df = codon_counts_df.set_index('Codon')
-        elif isinstance(codon_counts_df.index, pd.Index): pass # Assume index is codons
-        else: return pd.DataFrame(columns=output_cols) # Invalid structure
+        # Try setting index if 'Codon' column exists, otherwise fail
+        if 'Codon' in codon_counts_df.columns:
+            try:
+                codon_counts_df = codon_counts_df.set_index('Codon')
+            except Exception as idx_err:
+                logger.error(f"Failed to set 'Codon' as index for RSCU calculation: {idx_err}")
+                return empty_df
+        else:
+             logger.error("Invalid input for calculate_rscu: DataFrame must have 'Codon' as index or a 'Codon' column.")
+             return empty_df
 
-    # Ensure counts are numeric
-    codon_counts_df['Count'] = pd.to_numeric(codon_counts_df['Count'], errors='coerce').fillna(0).astype(int)
-    codon_counts_df = codon_counts_df[codon_counts_df['Count'] > 0] # Filter zero counts early? No, keep for frequency calculation
+    # Ensure counts are numeric, handle NaNs, filter zero counts which don't contribute to RSCU sums
+    try:
+        rscu_df = codon_counts_df.copy()
+        rscu_df['Count'] = pd.to_numeric(rscu_df['Count'], errors='coerce').fillna(0).astype(int)
+        # Keep zero counts for Frequency calculation later, but they don't affect RSCU value directly
+        # rscu_df = rscu_df[rscu_df['Count'] > 0] # Filter non-observed codons? Maybe not here.
+    except Exception as conv_err:
+        logger.error(f"Error converting counts to numeric for RSCU: {conv_err}")
+        return empty_df
 
-    if codon_counts_df.empty or codon_counts_df['Count'].sum() <= 0:
-        return pd.DataFrame(columns=output_cols)
+    # Check if any counts remain
+    total_raw_codons = rscu_df['Count'].sum()
+    if total_raw_codons <= 0:
+        logger.debug("No non-zero codon counts found for RSCU calculation.")
+        # Return df with original codons but NaN/0 values? Or empty? Let's return with values.
+        rscu_df['AminoAcid'] = rscu_df.index.map(get_genetic_code(genetic_code_id).get) # Add AA column
+        rscu_df['Frequency'] = 0.0
+        rscu_df['RSCU'] = np.nan
+        # Check if standard columns exist
+        for col in output_cols:
+            if col not in rscu_df: rscu_df[col] = 0 if col == 'Count' else (np.nan if col=='RSCU' else 0.0)
+        return rscu_df.reset_index()[output_cols]
+
 
     try:
-        genetic_code = get_genetic_code(genetic_code_id)
-        syn_codons = get_synonymous_codons(genetic_code)
-    except Exception as e:
-        print(f"Error getting genetic code info for RSCU: {e}", file=sys.stderr)
-        return pd.DataFrame(columns=output_cols)
+        genetic_code: Dict[str, str] = get_genetic_code(genetic_code_id)
+        syn_codons: Dict[str, List[str]] = get_synonymous_codons(genetic_code)
+    except (NotImplementedError, Exception) as e:
+        logger.error(f"Error getting genetic code info (ID: {genetic_code_id}) for RSCU: {e}")
+        return empty_df
 
-    rscu_df = codon_counts_df.copy()
+    # Map Amino Acids
     rscu_df['AminoAcid'] = rscu_df.index.map(genetic_code.get)
 
     # Calculate totals using only valid coding codons present in the input
     valid_coding_df = rscu_df.dropna(subset=['AminoAcid'])
-    valid_coding_df = valid_coding_df[valid_coding_df['AminoAcid'] != '*']
-    total_coding_codons = valid_coding_df['Count'].sum()
-    aa_counts = valid_coding_df.groupby('AminoAcid')['Count'].sum()
+    valid_coding_df = valid_coding_df[valid_coding_df['AminoAcid'] != '*'] # Exclude stops
+    total_coding_codons: int = int(valid_coding_df['Count'].sum()) # Ensure integer
+    aa_counts: pd.Series = valid_coding_df.groupby('AminoAcid')['Count'].sum()
 
-    rscu_values = {} # Use dict for easier assignment
+    rscu_values: Dict[str, float] = {} # Use dict for easier assignment
 
     for aa, syn_list in syn_codons.items():
-        if aa == '*' or len(syn_list) <= 1: # Skip stops and single-codon families
+        num_syn_codons: int = len(syn_list)
+        # Skip stops and single-codon families (Met, Trp) - their RSCU is undefined or 1
+        if aa == '*' or num_syn_codons <= 1:
             for codon in syn_list:
-                if codon in rscu_df.index: rscu_values[codon] = np.nan
+                if codon in rscu_df.index:
+                    rscu_values[codon] = np.nan # Or 1.0 for single codons? NaN is safer.
             continue
 
-        total_aa_count = aa_counts.get(aa, 0)
-        num_syn_codons = len(syn_list)
+        # Total count for this specific amino acid in the input data
+        total_aa_count: int = int(aa_counts.get(aa, 0))
 
-        if total_aa_count <= 0: # If this AA was not observed at all
+        # If this AA was not observed at all
+        if total_aa_count <= 0:
             for codon in syn_list:
-                if codon in rscu_df.index: rscu_values[codon] = 0.0 # RSCU is 0 if AA count is 0
+                if codon in rscu_df.index:
+                    rscu_values[codon] = 0.0 # RSCU is 0 if AA count is 0
             continue
 
-        expected_count = total_aa_count / num_syn_codons
-        if expected_count < 1e-9: # Avoid division by zero if somehow expected is zero
+        # Calculate expected count under equal usage
+        expected_count: float = total_aa_count / num_syn_codons
+
+        # Avoid division by zero if expected count is somehow zero (shouldn't happen if total_aa_count > 0)
+        if expected_count < 1e-9:
              for codon in syn_list:
-                 if codon in rscu_df.index: rscu_values[codon] = 0.0 # Or NaN? Let's use 0.
+                 if codon in rscu_df.index: rscu_values[codon] = 0.0
              continue
 
-        # Calculate RSCU for each codon in the family
+        # Calculate RSCU for each synonymous codon for this AA
         for codon in syn_list:
             if codon in rscu_df.index:
-                 observed_count = rscu_df.loc[codon, 'Count']
-                 rscu = observed_count / expected_count
+                 observed_count: int = int(rscu_df.loc[codon, 'Count'])
+                 rscu: float = observed_count / expected_count
                  rscu_values[codon] = rscu
-            # else: Codon wasn't in input, do nothing
+            # else: Codon from genetic code wasn't in the input counts df, do nothing
 
     # Add calculated RSCU values back to the main df
     rscu_df['RSCU'] = rscu_df.index.map(rscu_values)
 
-    # Calculate overall frequency
+    # Calculate overall frequency based on *coding* codons
     if total_coding_codons > 0:
-         rscu_df['Frequency'] = rscu_df['Count'] / total_coding_codons
+         # Calculate frequency only for coding codons relative to total coding codons
+         coding_indices = rscu_df['AminoAcid'] != '*' # Boolean mask
+         rscu_df['Frequency'] = np.where(
+             coding_indices,
+             rscu_df['Count'] / total_coding_codons,
+             0.0 # Frequency is 0 for stop codons
+         )
     else:
          rscu_df['Frequency'] = 0.0
 
     # Final formatting
-    rscu_df = rscu_df.reset_index()
-    for col in output_cols: # Ensure all expected columns exist
-        if col not in rscu_df.columns: rscu_df[col] = np.nan
+    rscu_df_final = rscu_df.reset_index()
+    # Ensure all expected columns exist, handling potential missing AAs etc.
+    for col in output_cols:
+        if col not in rscu_df_final.columns:
+            # Provide sensible defaults if a column is somehow missing
+            if col == 'Count': rscu_df_final[col] = 0
+            elif col == 'Frequency': rscu_df_final[col] = 0.0
+            elif col == 'RSCU': rscu_df_final[col] = np.nan
+            elif col == 'AminoAcid': rscu_df_final[col] = rscu_df_final['Codon'].map(genetic_code.get) # Remap just in case
+            else: rscu_df_final[col] = np.nan # Default for any other unexpected missing column
 
-    return rscu_df[output_cols]
+    return rscu_df_final[output_cols]
 
-def calculate_enc(codon_counts: dict | Counter, genetic_code_id: int = 1) -> float:
-    """ Calculates ENC using Wright's formula. Returns NaN if insufficient data. """
+
+def calculate_enc(codon_counts: Union[Dict[str, int], Counter[str]], genetic_code_id: int = 1) -> float:
+    """
+    Calculates the Effective Number of Codons (ENC) using Wright's formula.
+
+    Args:
+        codon_counts (Union[Dict[str, int], Counter[str]]): Codon counts for the sequence.
+        genetic_code_id (int): NCBI genetic code ID. Default is 1.
+
+    Returns:
+        float: ENC value, or np.nan if insufficient data or calculation fails.
+    """
     if not codon_counts: return np.nan
 
     try:
-        genetic_code = get_genetic_code(genetic_code_id)
-        syn_codons = get_synonymous_codons(genetic_code)
-    except Exception as e:
-        print(f"Error getting genetic code info for ENC: {e}", file=sys.stderr)
+        genetic_code: Dict[str, str] = get_genetic_code(genetic_code_id)
+        syn_codons: Dict[str, List[str]] = get_synonymous_codons(genetic_code)
+    except (NotImplementedError, Exception) as e:
+        logger.error(f"Error getting genetic code info (ID: {genetic_code_id}) for ENC: {e}")
         return np.nan
 
-    aa_codon_counts = {}
-    total_codons_in_families = 0
+    # Group counts by amino acid, considering only synonymous families > 1
+    aa_codon_counts: Dict[str, Dict[str, int]] = {}
+    total_codons_in_families: int = 0 # Sum of codons in multi-codon families (2, 3, 4, 6)
     for codon, count in codon_counts.items():
+        count = int(count) # Ensure integer
         if count <= 0: continue
-        aa = genetic_code.get(codon)
+        aa: Optional[str] = genetic_code.get(codon)
+        # Process if it's a valid coding AA belonging to a multi-codon family
         if aa and aa != '*' and len(syn_codons.get(aa,[])) > 1:
             if aa not in aa_codon_counts: aa_codon_counts[aa] = {}
             aa_codon_counts[aa][codon] = count
             total_codons_in_families += count
 
-    # Threshold Check
-    # Check based on total codons in multi-codon families
-    if total_codons_in_families < 50: # Keep threshold for now
-         # print("Warning: Not enough codons in multi-codon families for reliable ENC calc.", file=sys.stderr)
+    # Check threshold based on total codons in relevant families
+    # Wright suggested this requires sufficient data within families.
+    # Using a simple threshold on the sum across families might be less robust
+    # than checking counts *within* families, but simpler to implement.
+    min_codons_threshold = 50 # Minimum codons across all multi-codon families
+    if total_codons_in_families < min_codons_threshold:
+         logger.debug(f"Insufficient codons ({total_codons_in_families} < {min_codons_threshold}) in multi-codon families for reliable ENC calculation.")
          return np.nan
-    
-    F_values = {2: [], 3: [], 4: [], 6: []}
+
+    # Calculate F_i values (homozygosity) for each synonymous family degree (2, 3, 4, 6)
+    F_values: Dict[int, List[float]] = {2: [], 3: [], 4: [], 6: []}
+    num_families_processed: Dict[int, int] = {2: 0, 3: 0, 4: 0, 6: 0}
+
     for aa, counts in aa_codon_counts.items():
-        num_syn = len(syn_codons.get(aa, []))
+        num_syn: int = len(syn_codons.get(aa, []))
         if num_syn in F_values:
-            n_aa = sum(counts.values())
-            if n_aa > 1:
-                sum_p_sq = sum((c / n_aa) ** 2 for c in counts.values() if n_aa > 0) # Check n_aa > 0
-                F_i = (n_aa * sum_p_sq - 1) / (n_aa - 1)
-                if pd.notna(F_i) and F_i >= 0: F_values[num_syn].append(F_i)
+            n_aa: int = sum(counts.values()) # Total codons for this AA
+            # Require at least 2 codons observed for this AA to calculate F_i meaningfully
+            if n_aa >= 2:
+                try:
+                    sum_p_sq: float = sum((c / n_aa) ** 2 for c in counts.values())
+                    # Wright's F_i formula
+                    F_i: float = (n_aa * sum_p_sq - 1) / (n_aa - 1)
+                    # Check if F_i is valid (can be NaN if n_aa=1, handled above)
+                    if pd.notna(F_i) and F_i >= 0: # Homozygosity should be non-negative
+                        F_values[num_syn].append(F_i)
+                        num_families_processed[num_syn] += 1
+                    else:
+                         logger.debug(f"Invalid F_{num_syn} calculated for AA {aa} (n_aa={n_aa}, sum_p_sq={sum_p_sq:.3f}). Skipping family.")
+                except ZeroDivisionError:
+                     # Should not happen due to n_aa >= 2 check, but handle defensively
+                     logger.warning(f"ZeroDivisionError calculating F_{num_syn} for AA {aa}. Skipping family.")
+            # else: logger.debug(f"Skipping F_{num_syn} for AA {aa} (n_aa={n_aa} < 2).")
 
-    avg_F = {deg: np.mean(vals) if vals else 0 for deg, vals in F_values.items()}
-    n_deg_families = {deg: len(vals) for deg, vals in F_values.items()}
+    # Calculate average F value for each degree with valid data
+    avg_F: Dict[int, float] = {}
+    for deg, vals in F_values.items():
+        if vals: # If list is not empty
+            avg_F[deg] = np.mean(vals)
+        else:
+            avg_F[deg] = 0.0 # Or should be NaN if no families of this degree were processed? Wright implies contribution is 0 then.
 
-    enc = 2.0 # Start with Met, Trp contribution
+    # Calculate ENC using Wright's formula (or Fuglsang's modification if preferred)
+    # ENC = 2 + (9 / F_avg_2) + (1 / F_avg_3) + (5 / F_avg_4) + (3 / F_avg_6)
+    # Handle cases where avg_F is zero (meaning infinite contribution - cap ENC at 61)
+    enc: float = 2.0 # Start with Met (1) + Trp (1) contribution
 
-    # Add contributions, checking if family type had data (n_deg_families > 0)
-    if avg_F[2] > 1e-9 and n_deg_families[2] > 0: enc += 9.0 / avg_F[2]
-    if avg_F[3] > 1e-9 and n_deg_families[3] > 0: enc += 1.0 / avg_F[3]
-    if avg_F[4] > 1e-9 and n_deg_families[4] > 0: enc += 5.0 / avg_F[4]
-    if avg_F[6] > 1e-9 and n_deg_families[6] > 0: enc += 3.0 / avg_F[6]
+    # Add contributions only if the family type was observed (num_families_processed > 0)
+    # and average homozygosity is non-zero (to avoid division by zero)
+    if num_families_processed[2] > 0 and avg_F[2] > 1e-9: enc += 9.0 / avg_F[2]
+    if num_families_processed[3] > 0 and avg_F[3] > 1e-9: enc += 1.0 / avg_F[3]
+    if num_families_processed[4] > 0 and avg_F[4] > 1e-9: enc += 5.0 / avg_F[4]
+    if num_families_processed[6] > 0 and avg_F[6] > 1e-9: enc += 3.0 / avg_F[6]
 
-    if not np.isfinite(enc) or enc < 2.0: return np.nan # Check validity
-    enc = min(enc, 61.0) # Cap at max
+    # Check validity and cap ENC between 20 (min possible theoretically) and 61 (max)
+    if not np.isfinite(enc) or enc < 2.0: # Check < 2.0 as contributions are added to 2.0
+        logger.debug(f"ENC calculation resulted in invalid value ({enc:.3f}). Returning NaN.")
+        return np.nan
+    enc = min(enc, 61.0)
+    # Optional lower bound check, though Wright's formula starts at 2.
+    # enc = max(enc, 20.0) # Theoretical min if all families have max bias?
 
     return enc
 
 
-def calculate_cai(codon_counts: dict | Counter, reference_weights: dict) -> float:
+def calculate_cai(codon_counts: Union[Dict[str, int], Counter[str]], reference_weights: Dict[str, float]) -> float:
     """
     Calculates the Codon Adaptation Index (CAI).
 
     Args:
-        codon_counts (dict or Counter): Codon counts for the sequence.
-        reference_weights (dict): Dictionary mapping codons to their relative
-                                   adaptiveness weights (w).
+        codon_counts (Union[Dict[str, int], Counter[str]]): Codon counts for the sequence.
+        reference_weights (Dict[str, float]): Dictionary mapping codons to their relative
+                                              adaptiveness weights (w). Should be pre-calculated.
 
     Returns:
-        float: CAI value, or np.nan if calculation fails.
+        float: CAI value (geometric mean of weights), or np.nan if calculation fails.
+    """
+    # Check inputs
+    if not reference_weights or not codon_counts:
+        logger.debug("Cannot calculate CAI: Missing codon counts or reference weights.") # Redundant if called from wrapper
+        return np.nan
+
+    log_weights_sum: float = 0.0
+    total_codons_in_calc: int = 0 # Only codons included in the reference weights
+
+    for codon, count in codon_counts.items():
+        count = int(count)
+        if count <= 0: continue
+
+        weight: Optional[float] = reference_weights.get(codon)
+
+        # Only include codons present in the reference weight set
+        if weight is not None:
+            # Handle zero weight: CAI should be 0 if any codon used has weight 0
+            if weight <= 1e-9: # Using threshold for floating point
+                logger.debug(f"Codon {codon} has zero or near-zero weight ({weight}). CAI is 0.")
+                return 0.0
+            # Add log(weight) * count to sum
+            try:
+                log_weights_sum += math.log(weight) * count
+                total_codons_in_calc += count
+            except ValueError: # Log of negative weight (should not happen if weights are validated)
+                logger.warning(f"Cannot calculate log for non-positive weight ({weight}) of codon {codon}. Skipping codon in CAI.")
+            except Exception as e: # Catch other math errors
+                logger.warning(f"Math error processing weight for codon {codon} (weight={weight}): {e}. Skipping codon.")
+
+    # Check if any valid codons were found
+    if total_codons_in_calc == 0:
+        logger.debug("Cannot calculate CAI: No valid codons found with corresponding reference weights.")
+        return np.nan
+
+    # Calculate geometric mean: exp( sum(log(w_i) * count_i) / total_codons )
+    try:
+        cai: float = math.exp(log_weights_sum / total_codons_in_calc)
+    except OverflowError:
+        logger.warning("OverflowError calculating CAI (extremely high weights?). Returning infinity.")
+        return np.inf # Or np.nan? Inf might indicate issue with weights.
+    except Exception as e:
+        logger.exception(f"Unexpected error calculating final CAI value: {e}")
+        return np.nan
+
+    # Ensure CAI is within reasonable bounds [0, 1] if weights are relative adaptiveness
+    # This might depend on how weights were calculated. Standard CAI should be <= 1.
+    if np.isfinite(cai):
+        return max(0.0, min(cai, 1.0)) # Cap at 0 and 1
+    else:
+        logger.warning(f"CAI calculation resulted in non-finite value ({cai}). Returning NaN.")
+        return np.nan
+
+def calculate_fop(codon_counts: Union[Dict[str, int], Counter[str]], reference_weights: Dict[str, float]) -> float:
+    """
+    Calculates the Frequency of Optimal Codons (Fop).
+    Optimal codons are those with reference_weight == 1.0.
+
+    Args:
+        codon_counts (Union[Dict[str, int], Counter[str]]): Codon counts for the sequence.
+        reference_weights (Dict[str, float]): Dictionary mapping codons to weights.
+
+    Returns:
+        float: Fop value, or np.nan if calculation fails.
     """
     if not reference_weights or not codon_counts: 
+        logger.debug("Cannot calculate Fop: Missing codon counts or reference weights.")       
         return np.nan
-    log_weights_sum = 0.0
-    total_codons_in_calc = 0
-    for codon, count in codon_counts.items():
-        if count <= 0: continue
-        weight = reference_weights.get(codon)
-        if weight is not None:
-            if weight > 1e-9: log_weights_sum += math.log(weight) * count; total_codons_in_calc += count
-            elif weight <= 1e-9: return 0.0 # Weight 0 means CAI=0
-    if total_codons_in_calc == 0: return np.nan
-    try: cai = math.exp(log_weights_sum / total_codons_in_calc)
-    except OverflowError: return np.inf # Should not happen if weights <= 1
-    return max(0.0, min(cai, 1.0)) if np.isfinite(cai) else np.nan
 
-def calculate_fop(codon_counts: dict | Counter, reference_weights: dict) -> float:
-    """ Calculates Frequency of Optimal Codons (Fop). """
-    if not reference_weights or not codon_counts: return np.nan
-    optimal_codons = {c for c, w in reference_weights.items() if np.isclose(w, 1.0)}
-    if not optimal_codons: return np.nan
-    optimal_count = 0
-    total_count = 0
+    # Identify optimal codons (weight exactly 1.0, allowing for float comparison)
+    optimal_codons: Set[str] = {c for c, w in reference_weights.items() if np.isclose(w, 1.0)}
+    if not optimal_codons:
+        logger.warning("Cannot calculate Fop: No optimal codons (weight=1.0) found in reference set.")
+        return np.nan
+
+    optimal_count: int = 0
+    total_count: int = 0 # Count only codons present in the reference set
+
     for codon, count in codon_counts.items():
+        count = int(count)
         if count <= 0: continue
-        if codon in reference_weights: # Only count codons defined in reference
+        # Check if codon exists in the reference weights
+        if codon in reference_weights:
              total_count += count
-             if codon in optimal_codons: optimal_count += count
-    return optimal_count / total_count if total_count > 0 else np.nan
+             if codon in optimal_codons:
+                 optimal_count += count
 
-def calculate_rcdi(codon_counts: dict | Counter, reference_weights: dict) -> float:
-    """ Calculates Relative Codon Deoptimization Index (RCDI). """
-    if not reference_weights or not codon_counts: 
+    # Calculate Fop
+    if total_count == 0:
+        logger.debug("Cannot calculate Fop: No codons found matching the reference set.")
         return np.nan
-    
-    log_inv_weights_sum = 0.0
-    total_codons_in_calc = 0
+    else:
+        return optimal_count / total_count
+
+
+def calculate_rcdi(codon_counts: Union[Dict[str, int], Counter[str]], reference_weights: Dict[str, float]) -> float:
+    """
+    Calculates the Relative Codon Deoptimization Index (RCDI).
+    This measures similarity to a "deoptimized" reference (low usage frequency weights).
+    Formula: exp( sum( -log(w_i) * count_i ) / total_codons )
+    Assumes weights (w_i) represent relative adaptiveness (higher = better).
+
+    Args:
+        codon_counts (Union[Dict[str, int], Counter[str]]): Codon counts for the sequence.
+        reference_weights (Dict[str, float]): Dictionary mapping codons to weights.
+
+    Returns:
+        float: RCDI value, or np.nan if calculation fails. High value indicates deoptimization.
+    """
+    if not reference_weights or not codon_counts:
+        logger.debug("Cannot calculate RCDI: Missing codon counts or reference weights.") # <-- Log ajouté/décommenté
+        return np.nan
+
+    log_inv_weights_sum: float = 0.0
+    total_codons_in_calc: int = 0 # Only codons included in the reference weights
+
     for codon, count in codon_counts.items():
-        if count <= 0: 
-            continue
-        weight = reference_weights.get(codon)
+        count = int(count)
+        if count <= 0: continue
+
+        weight: Optional[float] = reference_weights.get(codon)
+        # Only include codons present in the reference weight set
         if weight is not None:
-            if weight > 1e-9: 
-                log_inv_weights_sum += (-math.log(weight)) * count; total_codons_in_calc += count
-            elif weight <= 1e-9: 
-                return np.nan # Weight=0 -> undefined RCDI
-    if total_codons_in_calc == 0: 
+            # Handle zero or negative weights: RCDI is undefined
+            if weight <= 1e-9:
+                logger.debug(f"Codon {codon} has zero or non-positive weight ({weight}). RCDI is undefined (NaN).")
+                return np.nan
+            # Add -log(weight) * count to sum
+            try:
+                log_inv_weights_sum += (-math.log(weight)) * count
+                total_codons_in_calc += count
+            except ValueError: # Should be caught by weight <= 1e-9, but safety check
+                logger.warning(f"Cannot calculate log for non-positive weight ({weight}) of codon {codon}. Skipping codon in RCDI.")
+            except Exception as e:
+                 logger.warning(f"Math error processing weight for codon {codon} (weight={weight}) in RCDI: {e}. Skipping codon.")
+
+    # Check if any valid codons were found
+    if total_codons_in_calc == 0:
+        logger.debug("Cannot calculate RCDI: No valid codons found with corresponding reference weights.")
         return np.nan
-    try: 
-        rcdi = math.exp(log_inv_weights_sum / total_codons_in_calc)
-    except OverflowError: 
+
+    # Calculate RCDI: exp( sum(-log(w_i) * count_i) / total_codons )
+    try:
+        rcdi: float = math.exp(log_inv_weights_sum / total_codons_in_calc)
+    except OverflowError:
+        logger.warning("OverflowError calculating RCDI (extremely low weights?). Returning infinity.")
         rcdi = np.inf
+    except Exception as e:
+        logger.exception(f"Unexpected error calculating final RCDI value: {e}")
+        return np.nan
+
+    # RCDI > 0. High value means deoptimized. No strict upper bound like CAI.
     return rcdi if np.isfinite(rcdi) else np.nan
 
 
 # === Main Analysis Orchestration ===
 
-def analyze_single_sequence(record: 'SeqRecord', genetic_code_id: int, reference_weights: dict) -> tuple[dict | None, dict | None]:
-    """ Performs analysis for a single cleaned sequence record. """
-    try: 
-        genetic_code = get_genetic_code(genetic_code_id)
-    except Exception as e: 
+# Type alias for the return tuple of analyze_single_sequence
+SingleSeqResultType = Tuple[Optional[Dict[str, Any]], Optional[Counter[str]]]
+
+def analyze_single_sequence(
+    record: SeqRecord,
+    genetic_code_id: int,
+    reference_weights: Dict[str, float] # Assume passed as non-Optional dict (or empty)
+) -> SingleSeqResultType:
+    """
+    Performs analysis for a single cleaned sequence record. Calculates metrics
+    like GC, ENC, CAI, Fop, RCDI, protein properties.
+
+    Args:
+        record (SeqRecord): The sequence record (assumed cleaned).
+        genetic_code_id (int): NCBI genetic code ID.
+        reference_weights (Dict[str, float]): Pre-calculated reference weights. Pass empty dict if none.
+
+    Returns:
+        SingleSeqResultType: Tuple containing:
+            - Dictionary of calculated metrics (or None).
+            - Codon counts (Counter) for the sequence (or None).
+    """
+    try:
+        genetic_code: Dict[str, str] = get_genetic_code(genetic_code_id)
+    except (NotImplementedError, Exception) as e:
+        logger.error(f"Cannot get genetic code {genetic_code_id} for seq {record.id}: {e}")
         return None, None
-    seq_id = record.id
-    seq_str = str(record.seq)
-    seq_len = len(seq_str)
-    results = {'ID': seq_id, 'Length': seq_len}
 
-    # Codon Counts
-    codon_counts_seq = Counter()
-    total_codons_seq = 0
-    for i in range(0, seq_len, 3):
-        codon = seq_str[i:i+3]
-        if all(base in VALID_CODON_CHARS for base in codon):
-            codon_counts_seq[codon] += 1
-            total_codons_seq += 1
-    results['TotalCodons'] = total_codons_seq
+    seq_id: str = record.id
+    seq_str: str = str(record.seq)
+    seq_len: int = len(seq_str)
+    # Initialize results dictionary
+    results: Dict[str, Any] = {'ID': seq_id, 'Length': seq_len}
+    # Initialize codon counts
+    codon_counts_seq: Counter[str] = Counter()
+    total_codons_seq: int = 0
 
-    # Fill NaNs if no codons
-    nan_metrics = {'GC': np.nan, 'GC1': np.nan, 'GC2': np.nan, 'GC3': np.nan, 'GC12': np.nan,
-                   'ENC': np.nan, 'CAI': np.nan, 'Fop': np.nan, 'RCDI': np.nan,
-                   'GRAVY': np.nan, 'Aromaticity': np.nan, 'ProteinLength': 0}
-    if total_codons_seq == 0: 
+    # Calculate Codon Counts
+    try:
+        for i in range(0, seq_len, 3):
+            codon: str = seq_str[i:i+3]
+            if all(base in VALID_CODON_CHARS for base in codon):
+                codon_counts_seq[codon] += 1
+                total_codons_seq += 1
+        results['TotalCodons'] = total_codons_seq
+    except Exception as count_err:
+        logger.error(f"Error counting codons for sequence {seq_id}: {count_err}")
+        # Return None if counting fails fundamentally? Or return partial results?
+        # Let's return partial results with NaNs for calculated metrics.
+        results['TotalCodons'] = 0
+        total_codons_seq = 0 # Ensure this is 0
+
+    # Define default NaN metrics
+    nan_metrics: Dict[str, Any] = { # Use Any for mixed types
+        'GC': np.nan, 'GC1': np.nan, 'GC2': np.nan, 'GC3': np.nan, 'GC12': np.nan,
+        'ENC': np.nan, 'CAI': np.nan, 'Fop': np.nan, 'RCDI': np.nan,
+        'GRAVY': np.nan, 'Aromaticity': np.nan, 'ProteinLength': 0
+    }
+
+    # If no codons counted, update with NaNs and return early
+    if total_codons_seq == 0:
+        logger.debug(f"No valid codons found or counted for sequence {seq_id}.")
         results.update(nan_metrics)
-        return results, None
-    
-    # Calculate Metrics
-    results['GC'], results['GC1'], results['GC2'], results['GC3'], results['GC12'] = calculate_gc_content(seq_str)
-    protein_seq = translate_sequence(seq_str, genetic_code)
-    results['ProteinLength'] = len(protein_seq.replace('*','').replace('X','').replace('?','')) if protein_seq else 0
-    results['GRAVY'], results['Aromaticity'] = calculate_protein_properties(protein_seq)
-    results['ENC'] = calculate_enc(codon_counts_seq, genetic_code_id)
-    results['CAI'] = calculate_cai(codon_counts_seq, reference_weights) if reference_weights else np.nan
-    results['Fop'] = calculate_fop(codon_counts_seq, reference_weights) if reference_weights else np.nan
-    results['RCDI'] = calculate_rcdi(codon_counts_seq, reference_weights) if reference_weights else np.nan
-    
+        return results, None # Return metrics dict (with NaNs) and None counts
+
+    # Calculate Metrics (if codons > 0)
+    try:
+        # GC Content
+        gc_tuple = calculate_gc_content(seq_str)
+        results['GC'], results['GC1'], results['GC2'], results['GC3'], results['GC12'] = gc_tuple
+
+        # Translation and Protein Properties
+        protein_seq: Optional[str] = translate_sequence(seq_str, genetic_code)
+        results['ProteinLength'] = len(protein_seq.replace('*','').replace('X','').replace('?','')) if protein_seq else 0
+        gravy, aromaticity = calculate_protein_properties(protein_seq)
+        results['GRAVY'], results['Aromaticity'] = gravy, aromaticity
+
+        # Codon Usage Indices
+        results['ENC'] = calculate_enc(codon_counts_seq, genetic_code_id)
+        # Calculate reference-based indices only if reference_weights were provided
+        if reference_weights:
+            results['CAI'] = calculate_cai(codon_counts_seq, reference_weights)
+            results['Fop'] = calculate_fop(codon_counts_seq, reference_weights)
+            results['RCDI'] = calculate_rcdi(codon_counts_seq, reference_weights)
+        else:
+            # Assign NaN if no reference weights
+            results['CAI'], results['Fop'], results['RCDI'] = np.nan, np.nan, np.nan
+
+    except Exception as calc_err:
+        # Log error during metric calculation
+        logger.error(f"Error calculating metrics for sequence {seq_id} (len {seq_len}): {calc_err}")
+        # Update results with NaNs for potentially missing metrics
+        results.update(nan_metrics) # Ensure all metric keys exist
+
+    # Return the metrics dictionary and the codon counts
     return results, codon_counts_seq
 
 
-# --- Main Analysis Function (Modified for Multiprocessing) ---
+# --- Main Analysis Function (SEQUENTIAL per-sequence analysis) ---
+# Define return type alias
+AnalysisResultType = Tuple[
+    pd.DataFrame,               # agg_usage_df
+    pd.DataFrame,               # per_sequence_df
+    Dict[str, float],           # overall_nucl_freqs
+    Dict[str, float],           # overall_dinucl_freqs
+    None,                       # Placeholder
+    None,                       # <-- ca_results toujours None maintenant
+    Optional[pd.DataFrame]      # ca_input_df (still calculated)
+]
 
-def run_full_analysis(sequences: list['SeqRecord'], genetic_code_id: int = 1,
-                      reference_weights: dict | None = None,
-                      num_threads: int = 1, perform_ca: bool = True) -> tuple:
+def run_full_analysis(
+    sequences: List[SeqRecord],
+    genetic_code_id: int = 1,
+    reference_weights: Optional[Dict[str, float]] = None
+) -> AnalysisResultType:
     """
-    Performs all analyses using multiprocessing for per-sequence calculations.
+    Performs all analyses SEQUENTIALLY for the provided list of sequences.
     Relies on pre-loaded reference_weights for CAI/Fop/RCDI.
-    Optionally skips the final CA fitting step.
+    Optionally prepares data for and performs Correspondence Analysis (CA).
 
     Args:
-        sequences (list[SeqRecord]): Input sequences for a single gene/dataset.
+        sequences (List[SeqRecord]): Input sequences for a single gene/dataset.
         genetic_code_id (int): NCBI genetic code ID.
-        reference_weights (dict | None): Pre-loaded dictionary mapping codons
-                                         to reference weights (w). Default None.
-        num_threads (int): Number of parallel processes.
-        perform_ca (bool): If True, perform Correspondence Analysis fitting.
+        reference_weights (Optional[Dict[str, float]]): Pre-loaded reference weights (w).
+        fit_ca_model (bool): If True, performs Correspondence Analysis fitting.
+                           If False, CA input data might still be generated but fitting is skipped.
 
     Returns:
-        tuple: Contains:
-            - pd.DataFrame: Aggregate codon usage table (Counts, Freq, RSCU).
-            - pd.DataFrame: Per-sequence metrics table.
-            - dict: Overall nucleotide frequencies for this input set.
-            - dict: Overall dinucleotide frequencies for this input set.
-            - pd.DataFrame or None: *No longer returns reference_data*. Kept None for consistent tuple size.
-            - prince.CA or None: Fitted CA object (if perform_ca is True).
-            - pd.DataFrame or None: CA input data (per-sequence RSCU).
+        AnalysisResultType: Tuple containing aggregated results, per-sequence results,
+                            frequencies, and optional CA results.
     """
     # --- Setup ---
-    genetic_code = get_genetic_code(genetic_code_id)
-    overall_nucl_freqs, _ = calculate_nucleotide_frequencies(sequences)
-    overall_dinucl_freqs, _ = calculate_dinucleotide_frequencies(sequences)
+    try:
+        genetic_code: Dict[str, str] = get_genetic_code(genetic_code_id)
+    except (NotImplementedError, Exception) as e:
+        logger.critical(f"Failed to get genetic code {genetic_code_id}. Cannot run analysis. Error: {e}")
+        # Return empty/None structure
+        empty_df = pd.DataFrame()
+        return empty_df, empty_df, {}, {}, None, None, None
 
-    # --- Per-Sequence Analysis (Parallelized) ---
-    analysis_func = partial(analyze_single_sequence, genetic_code_id=genetic_code_id, reference_weights=reference_weights)
-    all_results = []
-    effective_threads = max(1, num_threads) if isinstance(num_threads, int) else 1
-    if effective_threads > 1 and len(sequences) > 1 and mp: # Check if mp imported
-        try: # Add try block for pool
-            with mp.Pool(processes=effective_threads) as pool:
-                all_results = pool.map(analysis_func, sequences)
-        except Exception as e:
-             print(f"Multiprocessing error: {e}. Falling back to sequential.", file=sys.stderr)
-             all_results = [analysis_func(seq) for seq in sequences]
-    else:
-         all_results = [analysis_func(seq) for seq in sequences]
+    logger.debug(f"Starting full analysis for {len(sequences)} sequences.")
+    # Calculate overall frequencies based on the input sequences
+    overall_nucl_freqs: Dict[str, float]
+    total_bases: int
+    overall_nucl_freqs, total_bases = calculate_nucleotide_frequencies(sequences)
+    logger.debug(f"Calculated overall nucleotide frequencies (total bases: {total_bases}).")
 
-    # Process results
-    per_sequence_metrics_list = []; aggregate_codon_counts = Counter(); sequences_for_ca = {}
+    overall_dinucl_freqs: Dict[str, float]
+    total_dinucl: int
+    overall_dinucl_freqs, total_dinucl = calculate_dinucleotide_frequencies(sequences)
+    logger.debug(f"Calculated overall dinucleotide frequencies (total dinucleotides: {total_dinucl}).")
+
+    # --- Per-Sequence Analysis (SEQUENTIAL) ---
+    # `partial` fixes constant arguments for `analyze_single_sequence`
+    # Pass an empty dict for weights if None, to simplify analyze_single_sequence logic
+    _reference_weights_internal: Dict[str, float] = reference_weights if reference_weights is not None else {}
+    analysis_func = partial(analyze_single_sequence,
+                            genetic_code_id=genetic_code_id,
+                            reference_weights=_reference_weights_internal)
+
+    # Sequential loop over the provided sequences
+    logger.debug("Starting sequential analysis of individual sequences...")
+    all_results: List[SingleSeqResultType] = [analysis_func(seq) for seq in sequences]
+    logger.debug("Finished sequential analysis of individual sequences.")
+
+    # --- Process results ---
+    per_sequence_metrics_list: List[Dict[str, Any]] = []
+    aggregate_codon_counts: Counter[str] = Counter()
+    sequences_for_ca: Dict[str, pd.Series] = {} # {ID: Series(RSCU)}
+
     for result_tuple in all_results:
-        if result_tuple: # Check not None
+        if result_tuple and result_tuple[0] is not None: # Check if metrics dict exists
              metrics_dict, counts_dict = result_tuple
-             if metrics_dict: per_sequence_metrics_list.append(metrics_dict)
+             per_sequence_metrics_list.append(metrics_dict)
+             # Update aggregate counts and prepare CA data if counts exist
              if counts_dict:
-                  aggregate_codon_counts.update(counts_dict)
-                  seq_id = metrics_dict.get('ID')
-                  if seq_id: # Calculate and store RSCU vector for CA
-                      temp_counts_df = pd.DataFrame.from_dict(counts_dict, orient='index', columns=['Count']); temp_counts_df.index.name = 'Codon'
-                      temp_rscu_df = calculate_rscu(temp_counts_df, genetic_code_id=genetic_code_id)
-                      if not temp_rscu_df.empty and not temp_rscu_df['RSCU'].isnull().all():
-                           sequences_for_ca[seq_id] = temp_rscu_df.set_index('Codon')['RSCU'].fillna(0)
+                 aggregate_codon_counts.update(counts_dict)
+                 seq_id = metrics_dict.get('ID')
+                 # Prepare RSCU data for CA if ID exists
+                 if seq_id:
+                     try:
+                         # Create temporary DataFrame for this sequence only
+                         temp_counts_df = pd.DataFrame.from_dict(counts_dict, orient='index', columns=['Count'])
+                         if not temp_counts_df.empty: # Check df is not empty
+                            temp_counts_df.index.name = 'Codon'
+                            # Calculate RSCU for this single sequence
+                            temp_rscu_df = calculate_rscu(temp_counts_df, genetic_code_id=genetic_code_id)
+                            # Store the RSCU vector (index=Codon, values=RSCU), fill NaN with 0.0
+                            if not temp_rscu_df.empty:
+                                 rscu_vector: pd.Series = temp_rscu_df.set_index('Codon')['RSCU'].fillna(0.0)
+                                 sequences_for_ca[seq_id] = rscu_vector
+                     except Exception as rscu_err:
+                          logger.warning(f"Could not calculate RSCU for CA prep for seq {seq_id}: {rscu_err}")
 
-    # Check for results
+    # --- Check for results ---
+    empty_df = pd.DataFrame() # Define once
     if not per_sequence_metrics_list:
-         empty_df = pd.DataFrame(); return empty_df, empty_df, overall_nucl_freqs, overall_dinucl_freqs, None, None, None
+         logger.warning("No per-sequence metrics generated for this set.")
+         # Still return overall frequencies, but empty DFs and None for CA
+         return empty_df, empty_df, overall_nucl_freqs, overall_dinucl_freqs, None, None, None
 
-    per_sequence_df = pd.DataFrame(per_sequence_metrics_list)
+    # Create the final DataFrame for per-sequence metrics
+    try:
+        per_sequence_df = pd.DataFrame(per_sequence_metrics_list)
+    except Exception as df_err:
+         logger.exception(f"Error creating per-sequence DataFrame: {df_err}")
+         # Return overall frequencies, but empty DFs and None for CA
+         return empty_df, empty_df, overall_nucl_freqs, overall_dinucl_freqs, None, None, None
 
     # --- Aggregate Codon Usage ---
-    agg_usage_df = pd.DataFrame()
+    agg_usage_df: pd.DataFrame = empty_df # Initialize empty
     if aggregate_codon_counts:
-        agg_counts_df = pd.DataFrame.from_dict(aggregate_codon_counts, orient='index', columns=['Count']); agg_counts_df.index.name = 'Codon'; agg_counts_df.sort_index(inplace=True)
-        agg_usage_df = calculate_rscu(agg_counts_df, genetic_code_id=genetic_code_id)
+        logger.debug("Calculating aggregate codon usage (RSCU, Freq)...")
+        try:
+            agg_counts_df = pd.DataFrame.from_dict(aggregate_codon_counts, orient='index', columns=['Count'])
+            agg_counts_df.index.name = 'Codon'
+            agg_counts_df.sort_index(inplace=True)
+            agg_usage_df = calculate_rscu(agg_counts_df, genetic_code_id=genetic_code_id)
+            logger.debug("Finished calculating aggregate codon usage.")
+        except Exception as agg_err:
+             logger.exception(f"Error calculating aggregate codon usage: {agg_err}")
+             agg_usage_df = empty_df # Ensure it's empty on error
 
-    # --- CA Data Prep ---
-    ca_input_df = None
+    # --- CA Data Preparation ---
+    ca_input_df: Optional[pd.DataFrame] = None
     if sequences_for_ca:
+        logger.debug("Preparing CA input DataFrame (per-sequence RSCU)...")
         try:
             ca_input_df = pd.DataFrame.from_dict(sequences_for_ca, orient='index')
-            all_codons = sorted([c for c, aa in genetic_code.items() if aa != '*'])
+            # Ensure all coding codons are present as columns, in order
+            all_codons: List[str] = sorted([c for c, aa in genetic_code.items() if aa != '*'])
             ca_input_df = ca_input_df.reindex(columns=all_codons, fill_value=0.0)
-            ca_input_df.fillna(0.0, inplace=True); ca_input_df.replace([np.inf, -np.inf], 0.0, inplace=True)
-            ca_input_df = ca_input_df.loc[ca_input_df.sum(axis=1).abs() > 1e-9]; ca_input_df = ca_input_df.loc[:, ca_input_df.sum(axis=0).abs() > 1e-9]
-            if ca_input_df.empty: ca_input_df = None
-        except Exception as e: ca_input_df = None; print(f"Error preparing CA data: {e}", file=sys.stderr)
+            # Clean data (NaNs already filled, handle Inf)
+            ca_input_df.replace([np.inf, -np.inf], 0.0, inplace=True)
+            # Filter rows (sequences) and columns (codons) with zero/near-zero variance
+            rows_before = ca_input_df.shape[0]
+            cols_before = ca_input_df.shape[1]
+            ca_input_df = ca_input_df.loc[ca_input_df.sum(axis=1).abs() > 1e-9]
+            ca_input_df = ca_input_df.loc[:, ca_input_df.sum(axis=0).abs() > 1e-9]
+            logger.debug(f"CA input filtering: {rows_before}x{cols_before} -> {ca_input_df.shape[0]}x{ca_input_df.shape[1]}")
+            # If DataFrame becomes empty after filtering, set to None
+            if ca_input_df.empty:
+                 logger.warning("CA input DataFrame became empty after filtering zero-variance rows/columns.")
+                 ca_input_df = None
+            else:
+                 logger.debug("CA input DataFrame prepared successfully.")
+        except Exception as e:
+             ca_input_df = None
+             logger.exception(f"Error preparing CA input data: {e}")
 
-    # --- Perform CA ---
-    ca_results = None
-    if perform_ca and ca_input_df is not None:
-        ca_results = perform_ca(ca_input_df)
-
-    # --- Return ---
-    return (agg_usage_df, per_sequence_df, overall_nucl_freqs, overall_dinucl_freqs, None, ca_results, ca_input_df)
-
+    # --- Return all results ---
+    logger.debug("run_full_analysis finished.")
+    return (agg_usage_df, per_sequence_df, overall_nucl_freqs, overall_dinucl_freqs,
+            None, None, ca_input_df)
 
 
 # === Statistical Comparison Function ===
-def compare_features_between_genes(combined_per_sequence_df: pd.DataFrame,
-                                   features: list[str],
-                                   method: str = 'kruskal') -> pd.DataFrame | None:
+def compare_features_between_genes(
+    combined_per_sequence_df: pd.DataFrame,
+    features: List[str],
+    method: str = 'kruskal'
+) -> Optional[pd.DataFrame]:
     """
     Performs statistical tests to compare features between gene groups.
 
     Args:
         combined_per_sequence_df (pd.DataFrame): DataFrame containing per-sequence
                                                  metrics including a 'Gene' column.
-        features (list[str]): List of column names (features) to compare.
+        features (List[str]): List of column names (features) to compare.
         method (str): Statistical test method ('kruskal' for Kruskal-Wallis H-test
                       or 'anova' for one-way ANOVA). Default is 'kruskal'.
 
     Returns:
-        pd.DataFrame or None: DataFrame summarizing the test results (Feature,
-                              Test Statistic, P-value) or None if stats cannot be run.
+        Optional[pd.DataFrame]: DataFrame summarizing the test results (Feature,
+                                Test Statistic, P-value) or None if stats cannot be run.
     """
     if stats is None:
-        print("Warning: scipy.stats module not found. Cannot perform statistical comparisons.", file=sys.stderr)
+        logger.warning("scipy.stats module not found. Cannot perform statistical comparisons.")
         return None
     if combined_per_sequence_df is None or combined_per_sequence_df.empty:
-        print("Warning: Input data empty. Cannot perform statistical comparisons.", file=sys.stderr)
+        logger.warning("Input data empty for compare_features_between_genes.")
         return None
     if 'Gene' not in combined_per_sequence_df.columns:
-        print("Warning: 'Gene' column missing. Cannot perform statistical comparisons.", file=sys.stderr)
+        logger.error("'Gene' column missing. Cannot perform statistical comparisons.")
         return None
 
-    results = []
-    valid_genes = combined_per_sequence_df['Gene'].unique()
+    results: List[Dict[str, Any]] = []
+    valid_genes: List[str] = combined_per_sequence_df['Gene'].unique().tolist()
     if len(valid_genes) < 2:
-        print("Warning: Need at least two gene groups for comparison.", file=sys.stderr)
+        logger.warning("Need at least two gene groups for comparison.")
         return None
 
+    logger.info(f"Comparing features between groups using {method} test...")
     for feature in features:
         if feature not in combined_per_sequence_df.columns:
-            print(f"Warning: Feature '{feature}' not found in data. Skipping comparison.", file=sys.stderr)
+            logger.warning(f"Feature '{feature}' not found in data. Skipping comparison.")
             continue
 
         # Prepare data for the test: list of arrays/Series, one per gene group
-        # Ensure data is numeric and drop NaNs for the specific feature
-        feature_data = combined_per_sequence_df[['Gene', feature]].copy()
-        feature_data[feature] = pd.to_numeric(feature_data[feature], errors='coerce')
-        feature_data = feature_data.dropna()
+        try:
+            # Ensure data is numeric and drop NaNs for the specific feature
+            feature_data: pd.DataFrame = combined_per_sequence_df[['Gene', feature]].copy()
+            feature_data[feature] = pd.to_numeric(feature_data[feature], errors='coerce')
+            feature_data = feature_data.dropna(subset=[feature]) # Drop only if feature value is NaN
 
-        groups_data = [group[feature] for name, group in feature_data.groupby('Gene')]
+            # Group data by gene
+            groups_data: List[pd.Series] = [
+                group[feature] for name, group in feature_data.groupby('Gene') if not group.empty
+            ]
 
-        # Check if we have enough data in enough groups
-        valid_groups_data = [g for g in groups_data if len(g) > 0] # Groups with at least one data point
-        if len(valid_groups_data) < 2:
-            print(f"Warning: Not enough gene groups with valid data for feature '{feature}'. Skipping comparison.", file=sys.stderr)
-            continue
+            # Check if we have enough data in enough groups AFTER dropping NaNs for this feature
+            valid_groups_data: List[pd.Series] = [g for g in groups_data if len(g) > 0]
+            if len(valid_groups_data) < 2:
+                logger.debug(f"Not enough groups with valid data for feature '{feature}' after NaN removal. Skipping.")
+                continue
 
-        statistic = np.nan
-        p_value = np.nan
-        test_name = "N/A"
+        except KeyError:
+             logger.error(f"KeyError preparing data for feature '{feature}'. Skipping comparison.")
+             continue
+        except Exception as prep_err:
+             logger.exception(f"Error preparing data for feature '{feature}': {prep_err}. Skipping comparison.")
+             continue
+
+
+        statistic: float = np.nan
+        p_value: float = np.nan
+        test_name: str = "N/A"
 
         try:
-            if method == 'kruskal':
+            if method.lower() == 'kruskal':
                 test_name = "Kruskal-Wallis H"
                 statistic, p_value = stats.kruskal(*valid_groups_data)
-            elif method == 'anova':
+            elif method.lower() == 'anova':
                 test_name = "One-way ANOVA F"
                 statistic, p_value = stats.f_oneway(*valid_groups_data)
             else:
-                print(f"Warning: Unknown statistical method '{method}'. Skipping comparison for '{feature}'.", file=sys.stderr)
+                logger.warning(f"Unknown statistical method '{method}'. Skipping comparison for '{feature}'.")
                 continue
 
-        except ValueError as ve: # Handle errors like non-numeric data if coercion failed subtly
-            print(f"Warning: Statistical test failed for feature '{feature}'. Error: {ve}. Skipping.", file=sys.stderr)
-        except Exception as e:
-            print(f"Error during statistical test for feature '{feature}': {e}", file=sys.stderr)
+        except ValueError as ve:
+            # Catches errors like non-numeric data if coercion failed subtly, or unequal lengths for some tests
+            logger.warning(f"Statistical test ({method}) failed for feature '{feature}'. Error: {ve}. Skipping.")
+        except Exception as e: # Catch other stats errors
+            logger.exception(f"Error during statistical test ({method}) for feature '{feature}': {e}")
 
+        # Append results even if test failed (will have NaN values)
         results.append({
             'Feature': feature,
             'Test': test_name,
             'Statistic': statistic,
             'P_value': p_value
         })
+        logger.debug(f"  Comparison for '{feature}': Stat={statistic:.4g}, p={p_value:.4g}")
 
     if not results:
+        logger.warning("No features were successfully compared.")
         return None
+
     return pd.DataFrame(results)
 
+
 # === CA Fitting Function ===
-def perform_ca(ca_input_df, n_components=10):
+def perform_ca(ca_input_df: pd.DataFrame, n_components: int = 10) -> Optional[PrinceCA]: # type: ignore
     """
-    Performs Correspondence Analysis on the input DataFrame.
+    Performs Correspondence Analysis on the input DataFrame using the 'prince' library.
 
     Args:
         ca_input_df (pd.DataFrame): DataFrame with sequences as index, codons as columns,
-                                   and RSCU (or counts) as values.
-        n_components (int): Number of components for CA.
+                                   and RSCU (or counts) as values. Should be cleaned
+                                   (no NaNs/Infs, zero-variance rows/cols potentially removed).
+        n_components (int): Maximum number of components for CA. Default 10.
 
     Returns:
-        prince.CA or None: Fitted CA object, or None if CA fails or library missing.
+        Optional[prince.CA]: Fitted CA object from prince, or None if CA fails or library missing.
     """
     if prince is None:
-        print("Warning: 'prince' library not installed. Cannot perform CA.", file=sys.stderr)
+        logger.error("'prince' library not installed. Cannot perform CA.")
         return None
     if ca_input_df is None or ca_input_df.empty:
-         print("Warning: No input data provided for CA.", file=sys.stderr)
+         logger.error("No valid input data provided for CA.")
          return None
 
+    logger.info(f"Performing CA on DataFrame of shape {ca_input_df.shape}...")
     try:
-        # Ensure data is numeric and handle potential NaNs/Infs if not already done
-        ca_input_df = ca_input_df.fillna(0.0) # Fill NaNs first
-        ca_input_df.replace([np.inf, -np.inf], 0.0, inplace=True) # Replace Inf
+        # Ensure data is numeric (should be already, but double check)
+        ca_input_df = ca_input_df.astype(float)
 
-        # Filter zero variance rows/columns
-        ca_input_df_filtered = ca_input_df.loc[ca_input_df.sum(axis=1).abs() > 1e-9]
-        ca_input_df_filtered = ca_input_df_filtered.loc[:, ca_input_df_filtered.sum(axis=0).abs() > 1e-9]
-
-
-        if ca_input_df_filtered.shape[0] < 2 or ca_input_df_filtered.shape[1] < 2:
-            print("Warning: Not enough data (rows/columns >= 2) remaining for CA after filtering.", file=sys.stderr)
+        # Check shape again after potential filtering outside this function
+        if ca_input_df.shape[0] < 2 or ca_input_df.shape[1] < 2:
+            logger.error(f"Cannot perform CA: Input data shape ({ca_input_df.shape}) is too small (requires >= 2 rows and >= 2 columns).")
             return None
 
-        # Determine number of components dynamically
-        actual_n_components = min(n_components,
-                                  ca_input_df_filtered.shape[0] - 1,
-                                  ca_input_df_filtered.shape[1] - 1)
+        # Determine number of components dynamically, limited by data dimensions
+        actual_n_components: int = min(n_components,
+                                       ca_input_df.shape[0] - 1,
+                                       ca_input_df.shape[1] - 1)
 
         if actual_n_components < 1:
-            print("Warning: Calculated number of components for CA is less than 1.", file=sys.stderr)
+            logger.error(f"Calculated number of components for CA ({actual_n_components}) is less than 1.")
             return None
 
+        logger.debug(f"Fitting CA with n_components = {actual_n_components}")
+        # Initialize and fit CA
         ca = prince.CA(n_components=actual_n_components, n_iter=10, random_state=42, copy=True)
-        # --- Correction: Use the filtered DataFrame ---
-        ca_fitted = ca.fit(ca_input_df_filtered)
+        ca_fitted: PrinceCA = ca.fit(ca_input_df) # type: ignore # Use the potentially filtered DataFrame
+        logger.info("CA fitting completed.")
         return ca_fitted
 
-    except Exception as e:
-        print(f"Error during CA calculation: {e}", file=sys.stderr)
-        # import traceback
-        # traceback.print_exc() # Uncomment for more detailed debug info
+    except ValueError as ve: # Catch potential errors during fit (e.g., data issues)
+         logger.exception(f"ValueError during CA fitting: {ve}. Check input data matrix.")
+         return None
+    except Exception as e: # Catch other unexpected errors from prince
+        logger.exception(f"Unexpected error during CA calculation: {e}")
         return None
