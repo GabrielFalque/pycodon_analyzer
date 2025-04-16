@@ -1452,6 +1452,102 @@ def plot_correlation_heatmap(
     finally:
         if fig is not None: plt.close(fig)
 
+def plot_ca_axes_feature_correlation(
+    corr_df: pd.DataFrame,
+    pval_df: pd.DataFrame,
+    output_dir: str,
+    file_format: str,
+    significance_threshold: float = 0.05,
+    method_name: str = "Spearman"
+    ) -> None:
+    """
+    Generates a heatmap showing correlations between CA axes (Dim1, Dim2)
+    and other calculated features, highlighting significant correlations.
+
+    Args:
+        corr_df (pd.DataFrame): DataFrame of correlation coefficients.
+                                Index expected: ['CA_Dim1', 'CA_Dim2']. Columns: Features.
+        pval_df (pd.DataFrame): DataFrame of corresponding p-values.
+                                Must have same shape/index/columns as corr_df.
+        output_dir (str): Directory to save the plot.
+        file_format (str): Plot file format (e.g., 'png').
+        significance_threshold (float): P-value threshold for highlighting. Default 0.05.
+        method_name (str): Name of the correlation method used (for title). Default 'Spearman'.
+    """
+    if corr_df is None or corr_df.empty or pval_df is None or pval_df.empty:
+        logger.warning("Cannot plot CA-Feature correlation: Input DataFrames are missing or empty.")
+        return
+    if corr_df.shape != pval_df.shape or \
+       not corr_df.index.equals(pval_df.index) or \
+       not corr_df.columns.equals(pval_df.columns):
+        logger.error("Correlation and P-value DataFrame shapes or indices/columns mismatch.")
+        return
+    if not all(ax in corr_df.index for ax in ['CA_Dim1', 'CA_Dim2']):
+        logger.error("Correlation DataFrame index must contain 'CA_Dim1' and 'CA_Dim2'.")
+        return
+
+    fig: Optional[Figure] = None
+    try:
+        # Determine figure size based on number of features
+        n_features = len(corr_df.columns)
+        # Adjust height and width (esp. width if many features)
+        fig_height = max(4, len(corr_df.index) * 0.8)
+        fig_width = max(10, n_features * 0.4)
+        fig_width = min(fig_width, 45) # Limit max width to prevent huge plots
+
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+        # Create annotation matrix: Show value + '*' if significant, else empty string
+        annot_mask = pval_df < significance_threshold
+        # Create annotations: format number and add '*' if significant, else show nothing
+        annot_data = np.where(
+            annot_mask, # Condition (p-value < threshold)
+            corr_df.round(2).astype(str) + "*", # Value if True (coeff + star)
+            "" # Value if False (empty string)
+            # Alternatively, show all values but mark significant:
+            # corr_df.round(2).astype(str) + np.where(annot_mask, '*', '')
+        )
+
+        # Use a diverging colormap centered at 0
+        cmap = sns.diverging_palette(240, 10, s=99, l=50, as_cmap=True) # Blue-red example
+
+        sns.heatmap(
+            corr_df,
+            annot=annot_data,       # Use custom annotations (only significant values + star)
+            fmt="",                 # Format string is empty as annot_data is pre-formatted strings
+            cmap=cmap,
+            linewidths=.5,
+            linecolor='lightgray',
+            cbar=True,
+            center=0,               # Center colormap at zero correlation
+            vmin=-1, vmax=1,        # Ensure full correlation range [-1, 1] is mapped
+            annot_kws={"size": 7},  # Adjust font size if needed
+            cbar_kws={'label': f'{method_name} Correlation Coefficient', 'shrink': 0.7}, # Add label, shrink bar slightly
+            ax=ax
+        )
+
+        ax.set_title(f'{method_name} Correlation: CA Axes vs Features (p < {significance_threshold} marked with *)', fontsize=14)
+        ax.set_xlabel("Features", fontsize=12)
+        ax.set_ylabel("CA Axes", fontsize=12)
+        # Rotate feature labels if they overlap - adjust font size too
+        xtick_fontsize = 8 if n_features < 50 else (6 if n_features < 80 else 5)
+        plt.xticks(rotation=90, fontsize=xtick_fontsize)
+        plt.yticks(rotation=0, fontsize=10)
+
+        # Adjust layout to prevent labels being cut off
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Add padding
+
+        # Save the plot
+        safe_method_name = sanitize_filename(method_name)
+        output_filename = os.path.join(output_dir, f"ca_axes_feature_corr_{safe_method_name}.{file_format}")
+        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
+        logger.info(f"CA Axes vs Features correlation heatmap saved to: {output_filename}")
+
+    except Exception as e:
+        logger.exception(f"Error generating CA Axes vs Features correlation heatmap: {e}")
+    finally:
+        if fig is not None: plt.close(fig)
+
 
 # --- [Optional] plot_rscu_distribution_per_gene ---
 # This function might be redundant if plot_rscu_boxplot_per_gene is preferred.

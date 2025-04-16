@@ -29,6 +29,14 @@ import numpy as np
 from Bio.SeqRecord import SeqRecord
 from Bio.Seq import Seq
 
+try:
+    from scipy import stats as scipy_stats # Import for direct use
+    SCIPY_AVAILABLE = True
+except ImportError:
+    scipy_stats = None
+    SCIPY_AVAILABLE = False
+    # Warning logged later if stats needed but missing
+
 # Import necessary functions from local modules
 # Assuming type checkers can find these or using forward references if needed
 from . import io
@@ -286,7 +294,7 @@ def main() -> None:
         help="Maximum allowed percentage of ambiguous bases ('N') per sequence after cleaning (0-100)."
     )
     parser.add_argument(
-        "--plot_formats", nargs='+', default=['png'], type=str,
+        "--plot_formats", nargs='+', default=['svg'], type=str,
         help="Format(s) for saving plots (e.g., png, svg, pdf)."
     )
     parser.add_argument(
@@ -736,7 +744,7 @@ def main() -> None:
         ca_results_combined: Optional[analysis.PrinceCA] = None
         gene_groups_for_plotting: Optional[pd.Series] = None
         gene_color_map: Optional[Dict[str, Any]] = None
-
+        
         # 1. Determine all unique groups/genes presents in final data.
         # Use combined_per_sequence_df which should have 'Gene' column
         all_plot_groups: List[str] = []
@@ -769,6 +777,7 @@ def main() -> None:
         combined_ca_input_df: Optional[pd.DataFrame] = None
         ca_results_combined: Optional[Any] = None # Type depends on prince.CA object
         gene_groups_for_plotting: Optional[pd.Series] = None
+        ca_row_coords: Optional[pd.DataFrame] = None
 
         if not args.skip_ca and all_ca_input_dfs:
             logger.info("Performing combined Correspondence Analysis...")
@@ -789,6 +798,12 @@ def main() -> None:
                         ca_results_combined = analysis.perform_ca(combined_ca_input_df)
                         if ca_results_combined:
                             logger.info("Combined Correspondence Analysis complete.")
+                            try:
+                                ca_row_coords = ca_results_combined.row_coordinates(combined_ca_input_df)
+                                logger.debug(f"Extracted CA row coordinates with shape: {ca_row_coords.shape}")
+                            except Exception as coord_err:
+                                logger.error(f"Could not extract row coordinates from CA results: {coord_err}")
+                                ca_row_coords = None
                         else:
                             logger.warning("Combined CA calculation failed or produced no result.")
                             combined_ca_input_df = None # Reset df if CA fails
@@ -840,6 +855,107 @@ def main() -> None:
                 logger.info(f"Per-sequence RSCU table saved to: {rscu_wide_filepath}")
             except Exception as rscu_save_err:
                 logger.exception(f"Error saving per-sequence RSCU table: {rscu_save_err}")
+
+        # --- Correlation CA Axes vs Features ---
+        if ca_row_coords is not None and combined_per_sequence_df is not None and combined_ca_input_df is not None:
+            logger.info("Preparing data for CA Axes vs Features correlation heatmap...")
+            try:
+                # 1. Select Dim1, Dim2 from CA results
+                if ca_row_coords.shape[1] >= 2:
+                     ca_dims_to_merge = ca_row_coords[[0, 1]].copy()
+                     ca_dims_to_merge.columns = ['CA_Dim1', 'CA_Dim2']
+                else:
+                     logger.warning("CA result has fewer than 2 dimensions. Cannot create correlation heatmap.")
+                     raise ValueError("Insufficient CA dimensions") # Raise error to skip this section
+
+                # 2. Prepare merge key for metrics dataframe
+                df_metrics = combined_per_sequence_df.copy()
+                # Assuming 'Original_ID' and 'Gene' columns exist from previous steps
+                if 'Original_ID' not in df_metrics.columns or 'Gene' not in df_metrics.columns:
+                     raise KeyError("Missing 'Original_ID' or 'Gene' column in combined metrics for merging.")
+                def create_merge_key(row): return f"{row['Gene']}__{row['Original_ID']}"
+                df_metrics['merge_key'] = df_metrics.apply(create_merge_key, axis=1)
+                df_metrics.set_index('merge_key', inplace=True, verify_integrity=True) # Ensure unique keys
+
+                # 3. Merge CA dims, metrics, and RSCU values
+                # Check index compatibility before merge
+                if not ca_dims_to_merge.index.isin(df_metrics.index).all():
+                    logger.warning("Index mismatch between CA coordinates and metrics dataframe. Merge might lose data.")
+                if not ca_dims_to_merge.index.isin(combined_ca_input_df.index).all():
+                     logger.warning("Index mismatch between CA coordinates and RSCU dataframe. Merge might lose data.")
+
+                merged_df_1 = pd.merge(df_metrics, ca_dims_to_merge, left_index=True, right_index=True, how='inner')
+                # Merge RSCU data (combined_ca_input_df already has the right index type)
+                merged_df = pd.merge(merged_df_1, combined_ca_input_df, left_index=True, right_index=True, how='inner')
+
+                if merged_df.empty:
+                    logger.warning("Merged DataFrame for CA-Feature correlation is empty. Skipping heatmap.")
+                else:
+                    logger.info(f"Merged data for correlation created with shape: {merged_df.shape}")
+
+                    # 4. Define features and calculate correlations
+                    metric_features = ['Length', 'TotalCodons', 'GC', 'GC1', 'GC2', 'GC3', 'GC12', 'ENC', 'CAI', 'Fop', 'RCDI', 'ProteinLength', 'GRAVY', 'Aromaticity']
+                    metric_features = [f for f in metric_features if f in merged_df.columns] # Filter existing
+                    rscu_columns = sorted([col for col in combined_ca_input_df.columns if len(col) == 3 and col == col.upper()]) # Ensure sorted order
+                    features_to_correlate = metric_features + rscu_columns
+                    logger.info(f"Calculating Spearman correlations for CA Axes vs {len(features_to_correlate)} features...")
+
+                    corr_coeffs_dim1 = {}
+                    corr_pvals_dim1 = {}
+                    corr_coeffs_dim2 = {}
+                    corr_pvals_dim2 = {}
+
+                    if not SCIPY_AVAILABLE:
+                        logger.warning("Scipy not installed. Cannot calculate p-values for correlations. Heatmap will show coefficients only.")
+                        # Fallback to pandas correlation
+                        corr_matrix_full = merged_df[['CA_Dim1', 'CA_Dim2'] + features_to_correlate].corr(method='spearman')
+                        corr_matrix_subset = corr_matrix_full.loc[['CA_Dim1', 'CA_Dim2'], features_to_correlate]
+                        # Create dummy NaN p-value matrix
+                        pval_matrix_subset = pd.DataFrame(np.nan, index=corr_matrix_subset.index, columns=corr_matrix_subset.columns)
+                    else:
+                        # Calculate pairwise with scipy to get p-values
+                        ca_dim1_data = merged_df['CA_Dim1']
+                        ca_dim2_data = merged_df['CA_Dim2']
+                        for feature in features_to_correlate:
+                            feature_data = merged_df[feature]
+                            # Perform correlation only if there's variance and enough common non-NaN data points
+                            common_mask = ca_dim1_data.notna() & ca_dim2_data.notna() & feature_data.notna()
+                            n_common = common_mask.sum()
+                            if n_common < 3 or feature_data[common_mask].nunique() <= 1 or ca_dim1_data[common_mask].nunique() <= 1 or ca_dim2_data[common_mask].nunique() <= 1:
+                                corr_coeffs_dim1[feature], corr_pvals_dim1[feature] = np.nan, np.nan
+                                corr_coeffs_dim2[feature], corr_pvals_dim2[feature] = np.nan, np.nan
+                                continue
+                            try:
+                                corr1, pval1 = scipy_stats.spearmanr(ca_dim1_data[common_mask], feature_data[common_mask]) # nan_policy='omit' not needed due to mask
+                                corr2, pval2 = scipy_stats.spearmanr(ca_dim2_data[common_mask], feature_data[common_mask])
+                                corr_coeffs_dim1[feature], corr_pvals_dim1[feature] = corr1, pval1
+                                corr_coeffs_dim2[feature], corr_pvals_dim2[feature] = corr2, pval2
+                            except ValueError as spe_err: # Handle potential errors like all NaNs after filtering
+                                logger.warning(f"Could not calculate Spearman correlation for feature '{feature}': {spe_err}")
+                                corr_coeffs_dim1[feature], corr_pvals_dim1[feature] = np.nan, np.nan
+                                corr_coeffs_dim2[feature], corr_pvals_dim2[feature] = np.nan, np.nan
+
+                        # Create DataFrames from results
+                        corr_matrix_subset = pd.DataFrame({'CA_Dim1': corr_coeffs_dim1, 'CA_Dim2': corr_coeffs_dim2}).T
+                        pval_matrix_subset = pd.DataFrame({'CA_Dim1': corr_pvals_dim1, 'CA_Dim2': corr_pvals_dim2}).T
+
+                    # 5. Call plotting function
+                    if not args.skip_plots and not corr_matrix_subset.empty:
+                        for fmt in args.plot_formats:
+                            try:
+                                plotting.plot_ca_axes_feature_correlation(
+                                    corr_df=corr_matrix_subset, pval_df=pval_matrix_subset,
+                                    output_dir=args.output, file_format=fmt,
+                                    significance_threshold=0.05, method_name="Spearman")
+                            except Exception as plot_err:
+                                logger.error(f"Failed CA-Feature correlation heatmap ({fmt}): {plot_err}")
+
+            except (KeyError, ValueError) as merge_err:
+                logger.error(f"Error merging data for CA-Feature correlation (check IDs/columns): {merge_err}")
+            except Exception as e:
+                logger.exception(f"Unexpected error preparing data or plotting CA-Feature correlation: {e}")
+        else:
+            logger.info("Skipping CA Axes vs Features correlation heatmap: Missing CA results or combined metrics.")
 
 
         # --- Generate COMBINED Plots ---
