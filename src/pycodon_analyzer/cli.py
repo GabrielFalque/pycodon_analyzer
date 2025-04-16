@@ -100,13 +100,12 @@ def extract_gene_name_from_file(filename: str) -> Optional[str]:
 # Define a type alias for the complex return tuple for clarity
 GeneResultType = Tuple[
     Optional[str],                  # gene_name
-    str,                            # status
+    Optional[str],                  # status
     Optional[pd.DataFrame],         # per_sequence_df
-    Optional[pd.DataFrame],         # ca_input_df (still returned)
+    Optional[pd.DataFrame],         # ca_input_df (still needed for combined CA)
     Optional[Dict[str, float]],     # nucl_freqs
     Optional[Dict[str, float]],     # dinucl_freqs
-    Optional[Dict[str, Seq]],       # cleaned_seq_map
-    Optional[pd.DataFrame]          # agg_usage_df
+    Optional[Dict[str, Seq]]       # cleaned_seq_map
 ]
 
 def process_gene_file(gene_filepath: str,
@@ -130,86 +129,124 @@ def process_gene_file(gene_filepath: str,
                                   or None if the file should be skipped.
                                   The tuple contains status and result DataFrames/Dicts.
     """
-    pid_prefix = f"[Process {os.getpid()}]" # Prefix for logs from worker processes
+   # --- Set Matplotlib backend to non-interactive *within the worker* ---
+    # This is the crucial part for parallel plotting stability
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        # Optional: Import pyplot here if needed by plotting functions (often not directly)
+        # import matplotlib.pyplot as plt
+        # logger.debug(f"[Worker {os.getpid()}] Matplotlib backend set to Agg.") # Debug log
+    except ImportError:
+        logger.error(f"[Worker {os.getpid()}] Matplotlib not found. Cannot generate plots in this worker.")
+        # Decide behavior: proceed without plotting or return error? Let's proceed.
+    except Exception as backend_err:
+         logger.warning(f"[Worker {os.getpid()}] Could not set Matplotlib backend to Agg: {backend_err}")
+
+    pid_prefix = f"[Process {os.getpid()}]" # Keep for clarity in logs
     gene_name = extract_gene_name_from_file(gene_filepath)
 
-    # Check if the name is valid and part of the expected set
-    if not gene_name or gene_name not in expected_gene_names:
-        logger.debug(f"{pid_prefix} Skipping file (unexpected/invalid name): {os.path.basename(gene_filepath)}")
-        return None # Indicate this file should be ignored
+    if not gene_name or gene_name not in expected_gene_names: return None
 
     logger.info(f"{pid_prefix} Starting processing for gene: {gene_name} (File: {os.path.basename(gene_filepath)})")
+    # Define variables needed for plotting outside the analysis try block
+    agg_usage_df_gene: Optional[pd.DataFrame] = None
+    ca_input_df_gene: Optional[pd.DataFrame] = None
+
     try:
-        # 1. Read FASTA file
-        try:
-            raw_sequences: List[SeqRecord] = io.read_fasta(gene_filepath)
-        except FileNotFoundError:
-            logger.error(f"{pid_prefix} File not found: {gene_filepath}")
-            return (gene_name, "file not found", None, None, None, None, None, None)
-        except ValueError as e:
-            logger.error(f"{pid_prefix} Error parsing FASTA file {os.path.basename(gene_filepath)}: {e}")
-            return (gene_name, "parse error", None, None, None, None, None, None)
+        # 1. Read FASTA
+        raw_sequences: List[SeqRecord] = io.read_fasta(gene_filepath)
+        if not raw_sequences: return (gene_name, "empty file", None, None, None, None, None)
 
-        # If file is empty or contains no valid sequences
-        if not raw_sequences:
-            logger.warning(f"{pid_prefix} No sequences found in {os.path.basename(gene_filepath)}. Skipping gene {gene_name}.")
-            return (gene_name, "empty file", None, None, None, None, None, None)
-
-        # 2. Clean and filter sequences
-        logger.debug(f"{pid_prefix} Cleaning/Filtering {len(raw_sequences)} sequences for {gene_name}...")
+        # 2. Clean
         cleaned_sequences: List[SeqRecord] = clean_and_filter_sequences(raw_sequences, args.max_ambiguity)
-        # If no sequences survive cleaning
         if not cleaned_sequences:
-            logger.warning(f"{pid_prefix} No valid sequences remaining after cleaning for gene {gene_name}. Skipping analysis.")
-            return (gene_name, "no valid seqs", None, None, None, None, None, None)
-
-        # Prepare map {original_ID -> cleaned_Sequence} for later "complete" analysis
+             logger.warning(f"{pid_prefix} No valid sequences after cleaning for gene {gene_name}. Skipping.")
+             return (gene_name, "no valid seqs", None, None, None, None, None)
         cleaned_seq_map: Dict[str, Seq] = {seq_record.id: seq_record.seq for seq_record in cleaned_sequences}
 
-        # 3. Analyze cleaned sequences (calling the now internally sequential function)
-        # Note: fit_ca_model=True here to get ca_input_df for later aggregation.
-        # The actual CA fitting will happen later on the combined data.
-        logger.debug(f"{pid_prefix} Running analysis for {len(cleaned_sequences)} sequences of gene {gene_name}...")
+        # 3. Analyze (does not fit CA model)
         analysis_results: tuple = analysis.run_full_analysis(
             cleaned_sequences,
             args.genetic_code,
-            reference_weights=reference_weights # Pass pre-calculated weights
-            )
-        
-        # Unpack results safely
-        agg_usage_df_gene: Optional[pd.DataFrame] = analysis_results[0]
+            reference_weights=reference_weights
+            # No fit_ca_model argument
+        )
+        # Unpack needed results
+        agg_usage_df_gene = analysis_results[0] # Needed for plotting
         per_sequence_df_gene: Optional[pd.DataFrame] = analysis_results[1]
         nucl_freqs_gene: Optional[Dict[str, float]] = analysis_results[2]
         dinucl_freqs_gene: Optional[Dict[str, float]] = analysis_results[3]
-        # analysis_results[4] is None (placeholder)
-        # analysis_results[5] is None (ca_results is always None now)
-        ca_input_df_gene: Optional[pd.DataFrame] = analysis_results[6]
+        ca_input_df_gene = analysis_results[6] # Needed for plotting & combined CA
 
-        # 4. Prepare results for return (for aggregation in the main process)
-        # Modify IDs and add 'Gene' column to the returned DFs
-        if per_sequence_df_gene is not None and not per_sequence_df_gene.empty:
-            # Ensure ID column exists before trying to access it
-            if 'ID' in per_sequence_df_gene.columns:
-                per_sequence_df_gene['Original_ID'] = per_sequence_df_gene['ID']
-                per_sequence_df_gene['ID'] = per_sequence_df_gene['ID'].astype(str) + "_" + gene_name
+        # --- 4. Generate Per-Gene Plot (if not skipped) ---
+        if not args.skip_plots:
+            logger.debug(f"{pid_prefix} Preparing and generating RSCU boxplot for {gene_name}...")
+            if agg_usage_df_gene is not None and not agg_usage_df_gene.empty and \
+               ca_input_df_gene is not None and not ca_input_df_gene.empty:
+                try:
+                    # Prepare long format RSCU data from ca_input_df
+                    temp_ca_input = ca_input_df_gene.copy()
+                    # Remove gene prefix before melting (index should be Gene__SeqID)
+                    temp_ca_input.index = temp_ca_input.index.str.split('__', n=1).str[1]
+                    long_rscu_df = temp_ca_input.reset_index().rename(columns={'index': 'SequenceID'})
+                    long_rscu_df = long_rscu_df.melt(id_vars=['SequenceID'], var_name='Codon', value_name='RSCU')
+                    gc_dict = get_genetic_code(args.genetic_code)
+                    long_rscu_df['AminoAcid'] = long_rscu_df['Codon'].map(gc_dict.get)
+                    long_rscu_df['Gene'] = gene_name
+
+                    # Call plotting function for each format
+                    for fmt in args.plot_formats:
+                        logger.debug(f"{pid_prefix} Saving RSCU boxplot for {gene_name} as {fmt}...")
+                        try:
+                            # Call the plotting function directly
+                            plotting.plot_rscu_boxplot_per_gene(
+                                long_rscu_df, agg_usage_df_gene, gene_name, args.output, fmt
+                            )
+                        except Exception as plot_fmt_err:
+                            # Log error specific to plotting/saving this format
+                            logger.error(f"{pid_prefix} Failed to generate/save RSCU boxplot for {gene_name} (format: {fmt}): {plot_fmt_err}")
+                            # Optionally log traceback: logger.exception(...)
+
+                except Exception as plot_prep_err:
+                    # Log error during plot data preparation
+                    logger.error(f"{pid_prefix} Failed to prepare data for RSCU boxplot for {gene_name}: {plot_prep_err}")
             else:
-                logger.warning(f"{pid_prefix} 'ID' column missing in per_sequence_df for gene {gene_name}.")
+                logger.warning(f"{pid_prefix} Skipping RSCU boxplot generation for {gene_name} due to missing analysis data.")
+        # --- End Plotting ---
+
+        # 5. Prepare results for return
+        # Modify per_sequence_df IDs if it exists
+        if per_sequence_df_gene is not None and not per_sequence_df_gene.empty:
+            if 'ID' in per_sequence_df_gene.columns:
+                 per_sequence_df_gene['Original_ID'] = per_sequence_df_gene['ID']
+                 per_sequence_df_gene['ID'] = per_sequence_df_gene['ID'].astype(str) + "_" + gene_name
             per_sequence_df_gene['Gene'] = gene_name
 
+        # Ensure ca_input_df still has the prefix for combined analysis
         if ca_input_df_gene is not None and not ca_input_df_gene.empty:
-            # Prefix index (sequence ID) with gene name for uniqueness in combined CA
-            ca_input_df_gene.index = f"{gene_name}__" + ca_input_df_gene.index.astype(str)
+             # Check if NOT ALL indices start with the prefix before adding it
+             # (assuming it should have been added during run_full_analysis if needed)
+             index_as_str = ca_input_df_gene.index.astype(str)
+             if not index_as_str.str.startswith(f"{gene_name}__").all():
+                  logger.warning(f"{pid_prefix} Adding missing gene prefix to ca_input_df index for {gene_name}") # Log if this happens
+                  ca_input_df_gene.index = f"{gene_name}__" + index_as_str
 
         logger.info(f"{pid_prefix} Finished processing for gene: {gene_name}")
-        # Return all useful results for this gene
+        # Return tuple matching GeneResultType (no agg_usage_df needed back)
         return (gene_name, "success", per_sequence_df_gene, ca_input_df_gene,
-                nucl_freqs_gene, dinucl_freqs_gene, cleaned_seq_map, agg_usage_df_gene)
+                nucl_freqs_gene, dinucl_freqs_gene, cleaned_seq_map)
 
+    # --- Error Handling within worker ---
+    except FileNotFoundError: # Should be caught by read_fasta now
+        logger.error(f"{pid_prefix} File not found error for gene {gene_name}: {gene_filepath}")
+        return (gene_name, "file not found error", None, None, None, None, None)
+    except ValueError as ve: # Catch parsing errors or others
+        logger.error(f"{pid_prefix} ValueError processing gene {gene_name}: {ve}")
+        return (gene_name, "value error", None, None, None, None, None)
     except Exception as e:
-        # Catch unexpected errors during processing of this specific file/gene
         logger.exception(f"{pid_prefix} UNEXPECTED ERROR processing gene {gene_name} (file {os.path.basename(gene_filepath)}): {e}")
-        # Return error status and Nones
-        return (gene_name, "exception", None, None, None, None, None, None)
+        return (gene_name, "exception", None, None, None, None, None)
 
 
 # --- Main function ---
@@ -411,11 +448,10 @@ def main() -> None:
         logger.info(f"Processing {len(gene_files)} gene files using {num_file_processes} processes...")
 
         # Create partial function with fixed arguments
-        processing_task = partial(process_gene_file,
+        processing_task = partial(process_gene_file, # Pass args which includes skip_plots now
                                   args=args,
-                                  reference_weights=reference_weights, # Pass Optional Dict
+                                  reference_weights=reference_weights,
                                   expected_gene_names=expected_gene_names)
-
         gene_results_raw: List[Optional[GeneResultType]] = []
         # Use multiprocessing if > 1 process and module available
         if num_file_processes > 1 and MP_AVAILABLE:
@@ -450,8 +486,8 @@ def main() -> None:
 
             # Unpack tuple safely
             (gene_name_res, status, per_seq_df, ca_input_df,
-             nucl_freqs, dinucl_freqs, cleaned_map, agg_usage_df) = result
-
+             nucl_freqs, dinucl_freqs, cleaned_map) = result
+            
             if status == "success":
                 processed_genes.add(str(gene_name_res)) # Ensure string
                 # Append/add results if they are not None
@@ -469,20 +505,7 @@ def main() -> None:
                     for seq_id, seq_obj in cleaned_map.items():
                         if seq_id not in sequences_by_original_id: sequences_by_original_id[seq_id] = {}
                         sequences_by_original_id[seq_id][str(gene_name_res)] = seq_obj
-
-                # Prepare plot data
-                if ca_input_df is not None and agg_usage_df is not None:
-                    try:
-                        long_rscu_df = ca_input_df.reset_index().rename(columns={'index': 'SequenceID'})
-                        long_rscu_df['SequenceID'] = long_rscu_df['SequenceID'].str.split('__', n=1).str[1]
-                        long_rscu_df = long_rscu_df.melt(
-                            id_vars=['SequenceID'], var_name='Codon', value_name='RSCU')
-                        gc_dict = get_genetic_code(args.genetic_code)
-                        long_rscu_df['AminoAcid'] = long_rscu_df['Codon'].map(gc_dict.get)
-                        long_rscu_df['Gene'] = str(gene_name_res)
-                        gene_plot_data[str(gene_name_res)] = (long_rscu_df, agg_usage_df)
-                    except Exception as plot_prep_err:
-                         logger.warning(f"Could not prepare plot data for gene {gene_name_res}: {plot_prep_err}")
+                        
             else:
                 # Add failed gene/reason
                 failed_genes.append(f"{gene_name_res} ({status})")
@@ -646,6 +669,7 @@ def main() -> None:
                     temp_df_for_mean = combined_per_sequence_df.copy()
                     for col in available_mean_features:
                         temp_df_for_mean[col] = pd.to_numeric(temp_df_for_mean[col], errors='coerce')
+
                     mean_summary_df = temp_df_for_mean.groupby('Gene')[available_mean_features].mean(numeric_only=True).reset_index()
                     # Rename Aromaticity for clarity if desired
                     # if 'Aromaticity' in mean_summary_df.columns:

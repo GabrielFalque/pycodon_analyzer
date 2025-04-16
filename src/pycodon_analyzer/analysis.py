@@ -498,9 +498,10 @@ def calculate_enc(codon_counts: Union[Dict[str, int], Counter[str]], genetic_cod
     # Wright suggested this requires sufficient data within families.
     # Using a simple threshold on the sum across families might be less robust
     # than checking counts *within* families, but simpler to implement.
-    min_codons_threshold = 50 # Minimum codons across all multi-codon families
+    min_codons_threshold = 30 # Minimum codons across all multi-codon families
     if total_codons_in_families < min_codons_threshold:
-         logger.debug(f"Insufficient codons ({total_codons_in_families} < {min_codons_threshold}) in multi-codon families for reliable ENC calculation.")
+         # --- CHANGED logger from debug to info ---
+         logger.error(f"Insufficient codons ({total_codons_in_families} < {min_codons_threshold}) in multi-codon families for reliable ENC calculation.")
          return np.nan
 
     # Calculate F_i values (homozygosity) for each synonymous family degree (2, 3, 4, 6)
@@ -522,7 +523,8 @@ def calculate_enc(codon_counts: Union[Dict[str, int], Counter[str]], genetic_cod
                         F_values[num_syn].append(F_i)
                         num_families_processed[num_syn] += 1
                     else:
-                         logger.debug(f"Invalid F_{num_syn} calculated for AA {aa} (n_aa={n_aa}, sum_p_sq={sum_p_sq:.3f}). Skipping family.")
+                        # --- CHANGED logger from debug to info ---
+                        logger.info(f"Invalid F_{num_syn} calculated for AA {aa} (n_aa={n_aa}, sum_p_sq={sum_p_sq:.3f}). Skipping family.")
                 except ZeroDivisionError:
                      # Should not happen due to n_aa >= 2 check, but handle defensively
                      logger.warning(f"ZeroDivisionError calculating F_{num_syn} for AA {aa}. Skipping family.")
@@ -833,7 +835,7 @@ AnalysisResultType = Tuple[
     Dict[str, float],           # overall_nucl_freqs
     Dict[str, float],           # overall_dinucl_freqs
     None,                       # Placeholder
-    None,                       # <-- ca_results toujours None maintenant
+    None,                       # ca_results always None now
     Optional[pd.DataFrame]      # ca_input_df (still calculated)
 ]
 

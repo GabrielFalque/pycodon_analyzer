@@ -65,6 +65,10 @@ dev = [
 # Command name = package_name.module:function
 pycodon_analyzer = "pycodon_analyzer.cli:main" # Changed command and package name
 
+[project.urls]
+Homepage = "https://github.com/GabrielFalque/pycodon_analyzer"
+Repository = "https://github.com/GabrielFalque/pycodon_analyzer"
+
 # --- Setuptools configuration ---
 [tool.setuptools.packages.find]
 # Automatically find packages within the 'src' directory
