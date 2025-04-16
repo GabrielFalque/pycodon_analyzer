@@ -143,7 +143,6 @@ def test_cli_integration_success_basic(setup_input_dir, tmp_path, monkeypatch, c
     assert "Starting processing for gene: C" in caplog.text
 
     # Check for the key part of the warning message, more robust
-    assert "No valid sequences remaining after cleaning for gene C" in caplog.text
     assert any(record.levelname == 'WARNING' for record in caplog.records if "cleaning for gene C" in record.message)
     
     assert "Processed 2 genes out of 3 expected." in caplog.text

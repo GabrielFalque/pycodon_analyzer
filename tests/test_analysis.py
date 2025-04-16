@@ -230,8 +230,8 @@ def test_calculate_enc():
     enc_equal = analysis.calculate_enc(counts_equal, 1)
     assert np.isclose(enc_equal, 22.789, atol=0.001)
 
-    # Bias test (Phe) - Returns NaN because total codons (41) < threshold (50)
-    counts_phe_bias = Counter({'TTT': 40, 'TTC': 1})
+    # Bias test (Phe) - Returns NaN because total codons (21) < threshold (30)
+    counts_phe_bias = Counter({'TTT': 20, 'TTC': 1})
     enc_phe_bias = analysis.calculate_enc(counts_phe_bias, 1)
     # --- Expect NaN due to threshold ---
     assert pd.isna(enc_phe_bias), "ENC should be NaN for low codon count in families"
