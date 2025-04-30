@@ -47,6 +47,7 @@ dependencies = [
     "prince>=0.12.1",    # For CA
     "scipy>=1.6.0",      # Added for statistical tests
     "adjustText >= 0.8",
+    "rich >= 10.0",
     # 'importlib-resources >= 1.0; python_version<"3.9"', # Usually handled by setuptools now
 ]
 

@@ -62,7 +62,6 @@ except ImportError:
 try:
     from adjustText import adjust_text
     ADJUSTTEXT_AVAILABLE = True
-    print("AVAILABLE\n")
 except ImportError:
     ADJUSTTEXT_AVAILABLE = False
 

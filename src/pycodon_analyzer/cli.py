@@ -28,7 +28,25 @@ import pandas as pd
 import numpy as np
 from Bio.SeqRecord import SeqRecord
 from Bio.Seq import Seq
-
+try:
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn # type: ignore # Import Progress components
+    from rich.logging import RichHandler # type: ignore
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+    # Fallback using standard logging and no progress bar
+    def track(sequence, description="", total=None):
+        logging.info(f"{description} (running)...")
+        return sequence
+    RichHandler = logging.StreamHandler
+    logging.warning("WARNING: 'rich' library not found. Progress bar disabled, logging will be basic. Install with 'pip install rich'")
+    # Define Progress dummy for type hinting
+    Progress = Any
+    SpinnerColumn = Any
+    BarColumn = Any
+    TextColumn = Any
+    TimeElapsedColumn = Any
+    TimeRemainingColumn = Any
 try:
     from scipy import stats as scipy_stats # Import for direct use
     SCIPY_AVAILABLE = True
@@ -42,6 +60,7 @@ except ImportError:
 from . import io
 from . import analysis
 from . import plotting
+from . import utils
 from .utils import load_reference_usage, get_genetic_code, clean_and_filter_sequences
 
 # Import modules for parallelization
@@ -156,7 +175,7 @@ def process_gene_file(gene_filepath: str,
 
     if not gene_name or gene_name not in expected_gene_names: return None
 
-    logger.info(f"{pid_prefix} Starting processing for gene: {gene_name} (File: {os.path.basename(gene_filepath)})")
+    logger.debug(f"{pid_prefix} Starting processing for gene: {gene_name} (File: {os.path.basename(gene_filepath)})")
     # Define variables needed for plotting outside the analysis try block
     agg_usage_df_gene: Optional[pd.DataFrame] = None
     ca_input_df_gene: Optional[pd.DataFrame] = None
@@ -315,19 +334,31 @@ def main() -> None:
     )
     args: argparse.Namespace = parser.parse_args()
 
-    # --- Basic Logging Setup ---
+    # --- Explicit Rich Logging Setup ---
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        # stream=sys.stderr # Log to stderr by default
+    # Create RichHandler instance
+    rich_handler = RichHandler(
+        rich_tracebacks=True, show_path=False, markup=True, show_level=True
     )
-    # Mute overly verbose libraries if necessary (optional)
-    # logging.getLogger("matplotlib").setLevel(logging.WARNING)
-    # logging.getLogger("Bio").setLevel(logging.WARNING)
+    # Define format for the handler (RichHandler applies its own styling)
+    formatter = logging.Formatter("%(name)s - %(message)s", datefmt="[%X]") # Simpler format, Rich adds time/level
+    rich_handler.setFormatter(formatter)
+    rich_handler.setLevel(log_level)
 
-    logger.info("Starting PyCodon Analyzer run.")
+    # Get the root logger, remove existing handlers, add ONLY RichHandler
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level) # Set level on the logger itself
+    # Remove existing handlers IF using root logger and basicConfig might have run
+    if root_logger.hasHandlers():
+        for h in root_logger.handlers[:]: root_logger.removeHandler(h)
+    root_logger.addHandler(rich_handler)
+
+    # Also configure the specific logger if used elsewhere (optional but good practice)
+    logger.setLevel(log_level)
+    # logger.addHandler(rich_handler) # Add only if NOT adding to root logger
+    # logger.propagate = False # Prevent double logging if adding to specific and root
+
+    logger.info("Starting PyCodon Analyzer run (using Rich for logging/progress).")
     logger.debug(f"Arguments received: {args}")
 
     # --- Argument Validation & Setup ---
@@ -461,22 +492,46 @@ def main() -> None:
                                   reference_weights=reference_weights,
                                   expected_gene_names=expected_gene_names)
         gene_results_raw: List[Optional[GeneResultType]] = []
-        # Use multiprocessing if > 1 process and module available
-        if num_file_processes > 1 and MP_AVAILABLE:
-            try:
-                with mp.Pool(processes=num_file_processes) as pool:
-                    gene_results_raw = pool.map(processing_task, gene_files)
-            except Exception as pool_err:
-                 logger.exception(f"Error during parallel gene processing: {pool_err}. Falling back to sequential.")
-                 # Sequential fallback
-                 gene_results_raw = [processing_task(f) for f in gene_files]
-        else:
-             # Sequential processing
-             if num_file_processes > 1 and not MP_AVAILABLE:
-                  logger.info("Executing sequentially as multiprocessing is unavailable.")
-             else:
-                  logger.info("Executing sequentially.")
-             gene_results_raw = [processing_task(f) for f in gene_files]
+        
+        # Define Rich progress bar columns
+        progress_columns = [
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total} genes)"),
+            TimeElapsedColumn(),
+            TextColumn("<"),
+            TimeRemainingColumn(),
+        ]
+
+        # Create and use the Progress context manager
+        with Progress(*progress_columns, transient=False) as progress: # transient=False keeps bar after completion
+            # Add the main task
+            task_id = progress.add_task("Processing Genes", total=len(gene_files))
+
+            if num_file_processes > 1 and MP_AVAILABLE:
+                try:
+                    with mp.Pool(processes=num_file_processes) as pool:
+                        results_iterator = pool.imap(processing_task, gene_files)
+                        # Iterate and update progress manually
+                        for result in results_iterator:
+                            gene_results_raw.append(result)
+                            progress.update(task_id, advance=1) # Increment progress
+                except Exception as pool_err:
+                     logger.exception(f"Error during parallel processing: {pool_err}. Falling back to sequential.")
+                     # Sequential fallback with Progress
+                     for gene_file in gene_files:
+                         gene_results_raw.append(processing_task(gene_file))
+                         progress.update(task_id, advance=1)
+            else:
+                 # Sequential processing with Progress
+                 exec_mode = "sequentially (multiprocessing not available)" if num_file_processes > 1 else "sequentially"
+                 logger.info(f"Executing {exec_mode}.")
+                 for gene_file in gene_files: # Iterate directly
+                     gene_results_raw.append(processing_task(gene_file))
+                     progress.update(task_id, advance=1) # Increment progress
+        # --- End Progress context ---
 
         # --- Collect and Process Results ---
         logger.info("Collecting and aggregating results...")
