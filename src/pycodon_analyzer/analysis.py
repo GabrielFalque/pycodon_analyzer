@@ -500,8 +500,7 @@ def calculate_enc(codon_counts: Union[Dict[str, int], Counter[str]], genetic_cod
     # than checking counts *within* families, but simpler to implement.
     min_codons_threshold = 30 # Minimum codons across all multi-codon families
     if total_codons_in_families < min_codons_threshold:
-         # --- CHANGED logger from debug to info ---
-         logger.error(f"Insufficient codons ({total_codons_in_families} < {min_codons_threshold}) in multi-codon families for reliable ENC calculation.")
+         logger.warning(f"Insufficient codons ({total_codons_in_families} < {min_codons_threshold}) in multi-codon families for reliable ENC calculation. ENC will be NaN.") #
          return np.nan
 
     # Calculate F_i values (homozygosity) for each synonymous family degree (2, 3, 4, 6)
@@ -523,11 +522,10 @@ def calculate_enc(codon_counts: Union[Dict[str, int], Counter[str]], genetic_cod
                         F_values[num_syn].append(F_i)
                         num_families_processed[num_syn] += 1
                     else:
-                        # --- CHANGED logger from debug to info ---
-                        logger.info(f"Invalid F_{num_syn} calculated for AA {aa} (n_aa={n_aa}, sum_p_sq={sum_p_sq:.3f}). Skipping family.")
+                        logger.warning(f"Invalid F_{num_syn} calculated for AA {aa} (n_aa={n_aa}, sum_p_sq={sum_p_sq:.3f}). Skipping family for ENC.") #
                 except ZeroDivisionError:
                      # Should not happen due to n_aa >= 2 check, but handle defensively
-                     logger.warning(f"ZeroDivisionError calculating F_{num_syn} for AA {aa}. Skipping family.")
+                     logger.warning(f"ZeroDivisionError calculating F_{num_syn} for AA {aa}. Skipping family for ENC.")
             # else: logger.debug(f"Skipping F_{num_syn} for AA {aa} (n_aa={n_aa} < 2).")
 
     # Calculate average F value for each degree with valid data
