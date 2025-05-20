@@ -14,7 +14,8 @@ import os
 import sys
 import logging # <-- Import logging
 import traceback # Keep for detailed error logging if needed via logger.exception
-from typing import List, Dict, Optional, Any, Tuple, Set, Union # <-- Import typing helpers
+from typing import List, Dict, Optional, Any, Tuple, Set, Union
+
 
 # Third-party library imports with error handling for optional ones
 try:
@@ -47,8 +48,11 @@ except ImportError:
 
 try:
     from scipy import stats as stats
+    SCIPY_AVAILABLE = True
 except ImportError:
     print("CRITICAL ERROR: scipy.stats is required but not installed. Please install it (`pip install scipy`).", file=sys.stderr)
+    SCIPY_AVAILABLE = False
+    stats = None # Mock or placeholder
     sys.exit(1)
 
 # Optional: Try importing prince for type hinting if needed
@@ -1452,92 +1456,236 @@ def plot_correlation_heatmap(
         if fig is not None: plt.close(fig)
 
 def plot_ca_axes_feature_correlation(
-    corr_df: pd.DataFrame,
-    pval_df: pd.DataFrame,
+    ca_dims_df: pd.DataFrame, # DataFrame with CA_Dim1, CA_Dim2, index should be gene__sequenceID
+    metrics_df: pd.DataFrame, # DataFrame with metrics, index should be gene__sequenceID
+    rscu_df: pd.DataFrame,    # DataFrame with RSCU values, index should be gene__sequenceID
     output_dir: str,
     file_format: str,
     significance_threshold: float = 0.05,
-    method_name: str = "Spearman"
+    method_name: str = "Spearman",
+    features_to_correlate: Optional[List[str]] = None # Allow passing specific features
     ) -> None:
     """
     Generates a heatmap showing correlations between CA axes (Dim1, Dim2)
     and other calculated features, highlighting significant correlations.
 
     Args:
-        corr_df (pd.DataFrame): DataFrame of correlation coefficients.
-                                Index expected: ['CA_Dim1', 'CA_Dim2']. Columns: Features.
-        pval_df (pd.DataFrame): DataFrame of corresponding p-values.
-                                Must have same shape/index/columns as corr_df.
+        ca_dims_df (pd.DataFrame): DataFrame with CA dimensions (e.g., 'CA_Dim1', 'CA_Dim2')
+                                   as columns and an index matching metrics_df and rscu_df.
+        metrics_df (pd.DataFrame): DataFrame of per-sequence metrics. Must have an index
+                                   that can be aligned with ca_dims_df and rscu_df.
+                                   Expected to contain various feature columns.
+        rscu_df (pd.DataFrame): DataFrame of per-sequence RSCU values (codons as columns).
+                                Must have an index that can be aligned.
         output_dir (str): Directory to save the plot.
         file_format (str): Plot file format (e.g., 'png').
         significance_threshold (float): P-value threshold for highlighting. Default 0.05.
         method_name (str): Name of the correlation method used (for title). Default 'Spearman'.
+        features_to_correlate (Optional[List[str]]): Specific list of features from metrics_df
+                                                     and rscu_df to correlate against CA axes.
+                                                     If None, sensible defaults are used.
     """
-    if corr_df is None or corr_df.empty or pval_df is None or pval_df.empty:
-        logger.warning("Cannot plot CA-Feature correlation: Input DataFrames are missing or empty.")
+    if ca_dims_df is None or ca_dims_df.empty:
+        logger.warning("CA dimensions DataFrame is missing or empty. Cannot plot CA-Feature correlation.")
         return
-    if corr_df.shape != pval_df.shape or \
-       not corr_df.index.equals(pval_df.index) or \
-       not corr_df.columns.equals(pval_df.columns):
-        logger.error("Correlation and P-value DataFrame shapes or indices/columns mismatch.")
+    if metrics_df is None or metrics_df.empty:
+        logger.warning("Metrics DataFrame is missing or empty. Cannot plot CA-Feature correlation.")
         return
-    if not all(ax in corr_df.index for ax in ['CA_Dim1', 'CA_Dim2']):
-        logger.error("Correlation DataFrame index must contain 'CA_Dim1' and 'CA_Dim2'.")
+    if rscu_df is None or rscu_df.empty:
+        logger.warning("RSCU DataFrame is missing or empty. Cannot plot CA-Feature correlation.")
+        return
+
+    # --- Validate input DataFrames and their indices ---
+    # Ensure indices are unique for reliable merging
+    if not ca_dims_df.index.is_unique:
+        logger.error("Index of CA dimensions DataFrame is not unique. Aborting correlation plot.")
+        return
+    if not metrics_df.index.is_unique:
+        logger.error("Index of metrics DataFrame is not unique. Aborting correlation plot.")
+        return
+    if not rscu_df.index.is_unique:
+        logger.error("Index of RSCU DataFrame is not unique. Aborting correlation plot.")
         return
 
     fig: Optional[Figure] = None
     try:
-        # Determine figure size based on number of features
-        n_features = len(corr_df.columns)
-        # Adjust height and width (esp. width if many features)
-        fig_height = max(4, len(corr_df.index) * 0.8)
-        fig_width = max(10, n_features * 0.4)
-        fig_width = min(fig_width, 45) # Limit max width to prevent huge plots
+        # --- Merge DataFrames robustly ---
+        logger.debug(f"Initial shapes: CA_dims({ca_dims_df.shape}), Metrics({metrics_df.shape}), RSCU({rscu_df.shape})")
+
+        # Find common indices across all three DataFrames
+        common_index = ca_dims_df.index.intersection(metrics_df.index).intersection(rscu_df.index)
+
+        if common_index.empty:
+            logger.error("No common indices found between CA dimensions, metrics, and RSCU DataFrames. Cannot merge for correlation plot.")
+            return
+        
+        logger.info(f"Found {len(common_index)} common entries for merging CA dimensions, metrics, and RSCU data.")
+
+        # Align all DataFrames to the common index before merging
+        ca_dims_aligned = ca_dims_df.loc[common_index]
+        metrics_aligned = metrics_df.loc[common_index]
+        rscu_aligned = rscu_df.loc[common_index]
+
+        # Concatenate horizontally (axis=1) as they now share the same index
+        # This assumes no overlapping column names between metrics_aligned and rscu_aligned,
+        # except for the CA_dims already being separate.
+        # And CA_dims should not have common names with metrics or RSCU.
+        
+        # Check for column name conflicts before merging metrics_aligned and rscu_aligned
+        metric_cols = set(metrics_aligned.columns)
+        rscu_cols = set(rscu_aligned.columns)
+        overlapping_cols_mr = metric_cols.intersection(rscu_cols)
+        if overlapping_cols_mr:
+            logger.warning(f"Overlapping columns found between metrics and RSCU data: {overlapping_cols_mr}. These might cause issues or be overwritten during merge.")
+            # Potentially add suffixes or raise error
+            # For now, we'll let pandas handle it (last one wins for overlapping non-index cols)
+
+        merged_df_features = pd.concat([metrics_aligned, rscu_aligned], axis=1)
+        
+        # Now merge with CA dimensions
+        # Check for column name conflicts between merged_df_features and ca_dims_aligned
+        features_cols = set(merged_df_features.columns)
+        ca_dim_cols = set(ca_dims_aligned.columns)
+        overlapping_cols_fc = features_cols.intersection(ca_dim_cols)
+        if overlapping_cols_fc:
+             logger.error(f"Critical: Overlapping columns found between features and CA dimensions: {overlapping_cols_fc}. Aborting plot.")
+             return
+
+
+        merged_df = pd.concat([ca_dims_aligned, merged_df_features], axis=1)
+
+        if merged_df.empty:
+            logger.error("Merged DataFrame for CA-Feature correlation is empty. This should not happen if common_index was found. Aborting.")
+            return
+        
+        logger.info(f"Successfully merged data for correlation, final shape: {merged_df.shape}")
+
+        # --- Define features to correlate ---
+        if features_to_correlate is None:
+            # Default features if not provided
+            default_metric_features = ['Length', 'TotalCodons', 'GC', 'GC1', 'GC2', 'GC3', 'GC12',
+                                       'ENC', 'CAI', 'Fop', 'RCDI', 'ProteinLength', 'GRAVY', 'Aromaticity']
+            # Filter for those actually present in the merged_df
+            available_metric_features = [f for f in default_metric_features if f in merged_df.columns]
+            # Get all RSCU columns (typically 3-letter uppercase codons)
+            available_rscu_columns = sorted([col for col in rscu_aligned.columns if len(col) == 3 and col.isupper()])
+            features_to_correlate = available_metric_features + available_rscu_columns
+        else:
+            # If a list is provided, filter it to ensure all features exist in the merged_df
+            original_feature_count = len(features_to_correlate)
+            features_to_correlate = [f for f in features_to_correlate if f in merged_df.columns]
+            if len(features_to_correlate) < original_feature_count:
+                logger.warning("Some requested features for correlation were not found in the merged data and were skipped.")
+        
+        if not features_to_correlate:
+            logger.error("No valid features selected or available for CA-Feature correlation. Aborting plot.")
+            return
+
+        # CA dimension columns (assuming they are the first columns from ca_dims_aligned)
+        ca_dim_column_names = list(ca_dims_aligned.columns)
+        if not ca_dim_column_names:
+            logger.error("No CA dimension columns found in ca_dims_df. Aborting plot.")
+            return
+
+        # --- Calculate Correlations ---
+        logger.info(f"Calculating {method_name} correlations for {len(ca_dim_column_names)} CA Axes vs {len(features_to_correlate)} features...")
+        all_corr_coeffs: Dict[str, Dict[str, float]] = {}
+        all_p_values: Dict[str, Dict[str, float]] = {}
+
+        if not SCIPY_AVAILABLE: # Assuming SCIPY_AVAILABLE is defined globally or passed
+            logger.warning(f"Scipy not installed. Cannot calculate p-values for {method_name} correlations. Heatmap will show coefficients only.")
+            # Fallback to pandas correlation for all CA dims vs all features
+            corr_matrix_full = merged_df[ca_dim_column_names + features_to_correlate].corr(method=method_name.lower())
+            corr_matrix_subset = corr_matrix_full.loc[ca_dim_column_names, features_to_correlate]
+            pval_matrix_subset = pd.DataFrame(np.nan, index=corr_matrix_subset.index, columns=corr_matrix_subset.columns)
+        else:
+            for ca_dim_col in ca_dim_column_names:
+                all_corr_coeffs[ca_dim_col] = {}
+                all_p_values[ca_dim_col] = {}
+                ca_dim_data = merged_df[ca_dim_col]
+                for feature in features_to_correlate:
+                    feature_data = merged_df[feature]
+                    common_mask = ca_dim_data.notna() & feature_data.notna()
+                    n_common = common_mask.sum()
+
+                    if n_common < 3 or feature_data[common_mask].nunique() <= 1 or ca_dim_data[common_mask].nunique() <= 1 :
+                        all_corr_coeffs[ca_dim_col][feature] = np.nan
+                        all_p_values[ca_dim_col][feature] = np.nan
+                        continue
+                    try:
+                        if method_name.lower() == 'spearman':
+                            corr, pval = stats.spearmanr(ca_dim_data[common_mask], feature_data[common_mask])
+                        elif method_name.lower() == 'pearson':
+                            corr, pval = stats.pearsonr(ca_dim_data[common_mask], feature_data[common_mask])
+                        else:
+                            logger.warning(f"Unsupported correlation method '{method_name}'. Defaulting to Spearman.")
+                            corr, pval = stats.spearmanr(ca_dim_data[common_mask], feature_data[common_mask])
+                        all_corr_coeffs[ca_dim_col][feature] = corr
+                        all_p_values[ca_dim_col][feature] = pval
+                    except ValueError as spe_err:
+                        logger.warning(f"Could not calculate {method_name} correlation for {ca_dim_col} vs '{feature}': {spe_err}")
+                        all_corr_coeffs[ca_dim_col][feature] = np.nan
+                        all_p_values[ca_dim_col][feature] = np.nan
+            
+            corr_matrix_subset = pd.DataFrame.from_dict(all_corr_coeffs, orient='index')
+            pval_matrix_subset = pd.DataFrame.from_dict(all_p_values, orient='index')
+            # Reorder columns to match features_to_correlate if necessary
+            if not corr_matrix_subset.empty:
+                corr_matrix_subset = corr_matrix_subset.reindex(columns=features_to_correlate)
+            if not pval_matrix_subset.empty:
+                pval_matrix_subset = pval_matrix_subset.reindex(columns=features_to_correlate)
+
+
+        if corr_matrix_subset.empty:
+            logger.error("Correlation matrix is empty. Cannot generate heatmap.")
+            return
+
+        # --- Plotting ---
+        # Ensure figure size calculation uses corr_matrix_subset
+        n_features_plot = len(corr_matrix_subset.columns)
+        fig_height = max(4, len(corr_matrix_subset.index) * 0.8)
+        fig_width = max(10, n_features_plot * 0.4)
+        fig_width = min(fig_width, 45)
 
         fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
-        # Create annotation matrix: Show value + '*' if significant, else empty string
-        annot_mask = pval_df < significance_threshold
-        # Create annotations: format number and add '*' if significant, else show nothing
+        annot_mask = pval_matrix_subset < significance_threshold
         annot_data = np.where(
-            annot_mask, # Condition (p-value < threshold)
-            corr_df.round(2).astype(str) + "*", # Value if True (coeff + star)
-            "" # Value if False (empty string)
-            # Alternatively, show all values but mark significant:
-            # corr_df.round(2).astype(str) + np.where(annot_mask, '*', '')
+            annot_mask,
+            corr_matrix_subset.round(2).astype(str) + "*",
+            # For non-significant, show value if you want, or ""
+            # corr_matrix_subset.round(2).astype(str) # To show all values
+            "" # To show only significant values
         )
 
-        # Use a diverging colormap centered at 0
-        cmap = sns.diverging_palette(240, 10, s=99, l=50, as_cmap=True) # Blue-red example
+        cmap = sns.diverging_palette(240, 10, s=99, l=50, as_cmap=True)
 
         sns.heatmap(
-            corr_df,
-            annot=annot_data,       # Use custom annotations (only significant values + star)
-            fmt="",                 # Format string is empty as annot_data is pre-formatted strings
+            corr_matrix_subset, # Use the correctly ordered subset
+            annot=annot_data,
+            fmt="",
             cmap=cmap,
             linewidths=.5,
             linecolor='lightgray',
             cbar=True,
-            center=0,               # Center colormap at zero correlation
-            vmin=-1, vmax=1,        # Ensure full correlation range [-1, 1] is mapped
-            annot_kws={"size": 7},  # Adjust font size if needed
-            cbar_kws={'label': f'{method_name} Correlation Coefficient', 'shrink': 0.7}, # Add label, shrink bar slightly
+            center=0,
+            vmin=-1, vmax=1,
+            annot_kws={"size": 7},
+            cbar_kws={'label': f'{method_name} Correlation Coefficient', 'shrink': 0.7},
             ax=ax
         )
 
         ax.set_title(f'{method_name} Correlation: CA Axes vs Features (p < {significance_threshold} marked with *)', fontsize=14)
         ax.set_xlabel("Features", fontsize=12)
         ax.set_ylabel("CA Axes", fontsize=12)
-        # Rotate feature labels if they overlap - adjust font size too
-        xtick_fontsize = 8 if n_features < 50 else (6 if n_features < 80 else 5)
-        plt.xticks(rotation=90, fontsize=xtick_fontsize)
+        
+        xtick_fontsize = 8 if n_features_plot < 50 else (6 if n_features_plot < 80 else 5)
+        plt.xticks(rotation=90, ha='right', fontsize=xtick_fontsize) # ha='right' for better alignment
         plt.yticks(rotation=0, fontsize=10)
 
-        # Adjust layout to prevent labels being cut off
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Add padding
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-        # Save the plot
-        safe_method_name = sanitize_filename(method_name)
+        safe_method_name = sanitize_filename(method_name) # Assuming sanitize_filename is available
         output_filename = os.path.join(output_dir, f"ca_axes_feature_corr_{safe_method_name}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"CA Axes vs Features correlation heatmap saved to: {output_filename}")
@@ -1545,7 +1693,8 @@ def plot_ca_axes_feature_correlation(
     except Exception as e:
         logger.exception(f"Error generating CA Axes vs Features correlation heatmap: {e}")
     finally:
-        if fig is not None: plt.close(fig)
+        if fig is not None:
+            plt.close(fig)
 
 
 # --- [Optional] plot_rscu_distribution_per_gene ---
