@@ -12,7 +12,8 @@ import os
 import sys
 import logging # <-- Import logging
 import math
-from typing import List, Dict, Optional, Tuple, Set, Union, Any # <-- Import typing helpers
+import csv
+from typing import List, Dict, Optional, Tuple, Set, Union, Any
 
 # Third-party imports with checks
 try:
@@ -138,18 +139,21 @@ def get_synonymous_codons(genetic_code: Dict[str, str]) -> Dict[str, List[str]]:
 def load_reference_usage(
     filepath: str,
     genetic_code: Dict[str, str],
-    genetic_code_id: int = 1
+    genetic_code_id: int = 1,
+    delimiter: Optional[str] = None # New parameter
 ) -> Optional[pd.DataFrame]:
     """
     Loads a reference codon usage table (e.g., for CAI weights or comparison).
     Expects a CSV or TSV file with columns for Codon and one of:
     Frequency, Count, RSCU, or 'Frequency (per thousand)'.
-    Infers delimiter. Calculates RSCU and CAI weights (w).
+    Infers delimiter if not specified. Calculates RSCU and CAI weights (w).
 
     Args:
         filepath (str): Path to the reference file.
         genetic_code (Dict[str, str]): Genetic code mapping dictionary.
         genetic_code_id (int): The ID of the genetic code being used (default: 1).
+        delimiter (Optional[str]): The delimiter used in the file. If None,
+                                   it will be auto-detected. Default None.
 
     Returns:
         Optional[pd.DataFrame]: DataFrame with Codon as index and columns
@@ -162,44 +166,82 @@ def load_reference_usage(
 
     df: Optional[pd.DataFrame] = None
     read_error: Optional[Exception] = None
+    used_delimiter: Optional[str] = delimiter # Keep track of the delimiter used
 
-    # Try reading with common delimiters, logging attempts
-    delimiters_to_try: List[str] = ['\t', ',', None] # Try tab, then comma, then auto
-    for i, delim in enumerate(delimiters_to_try):
-        attempt_desc = f"delimiter '{delim}'" if delim else "auto-detection"
-        logger.debug(f"Attempting to read reference file '{os.path.basename(filepath)}' using {attempt_desc}...")
-        try:
-            df = pd.read_csv(filepath, sep=delim, engine='python', comment='#')
-            # Basic check if it worked (e.g., > 1 column, unless auto-detect gives 1)
-            if df is not None and (len(df.columns) > 1 or delim is None):
-                logger.debug(f"Successfully read reference file using {attempt_desc}.")
-                read_error = None # Clear previous error if successful
-                break # Exit loop on success
-            else:
-                logger.debug(f"Reading with {attempt_desc} resulted in <= 1 column. Trying next.")
-                # Reset df to None if it wasn't a good read
-                df = None
-        except pd.errors.ParserError as pe:
-            logger.debug(f"ParserError reading with {attempt_desc}: {pe}")
-            read_error = pe # Store the error
-            if i == len(delimiters_to_try) - 1: # If it's the last attempt
-                 logger.error(f"Could not parse reference file '{os.path.basename(filepath)}' with any delimiter.")
+    # --- Attempt to read the file ---
+    try:
+        if used_delimiter:
+            logger.debug(f"Attempting to read reference file '{os.path.basename(filepath)}' using specified delimiter: '{used_delimiter}'")
+            df = pd.read_csv(filepath, sep=used_delimiter, engine='python', comment='#')
+        else:
+            # Try to sniff the delimiter first
+            try:
+                with open(filepath, 'r', newline='') as csvfile:
+                    # Read a sample of the file for sniffing
+                    sample = csvfile.read(2048) # Read more bytes for better sniffing
+                    csvfile.seek(0) # Reset file pointer
+                    dialect = csv.Sniffer().sniff(sample, delimiters=',\t; ') # Common delimiters
+                    used_delimiter = dialect.delimiter
+                    logger.info(f"Delimiter sniffed for '{os.path.basename(filepath)}': '{used_delimiter}'")
+                    df = pd.read_csv(filepath, sep=used_delimiter, engine='python', comment='#')
+            except csv.Error as sniff_err:
+                logger.warning(f"Could not reliably sniff delimiter for '{os.path.basename(filepath)}': {sniff_err}. Falling back to trying common delimiters.")
+                # Fallback to trying a list of delimiters
+                delimiters_to_try: List[Optional[str]] = ['\t', ',', None] # Try tab, then comma, then pandas auto-detect
+                for i, delim_try in enumerate(delimiters_to_try):
+                    attempt_desc = f"delimiter '{delim_try}'" if delim_try else "pandas auto-detection"
+                    logger.debug(f"Attempting to read reference file '{os.path.basename(filepath)}' using {attempt_desc}...")
+                    try:
+                        df = pd.read_csv(filepath, sep=delim_try, engine='python', comment='#')
+                        if df is not None and (len(df.columns) > 1 or delim_try is None):
+                            logger.info(f"Successfully read reference file using {attempt_desc}.")
+                            used_delimiter = delim_try if delim_try else "auto" # Store what worked
+                            read_error = None
+                            break
+                        else:
+                            logger.debug(f"Reading with {attempt_desc} resulted in <= 1 column or empty DataFrame. Trying next.")
+                            df = None # Reset df if it wasn't a good read
+                            if i == len(delimiters_to_try) - 1 and df is None: # Last attempt failed
+                                logger.error(f"Could not parse reference file '{os.path.basename(filepath)}' with any fallback delimiter.")
+                                return None
+                    except pd.errors.ParserError as pe:
+                        logger.debug(f"ParserError reading with {attempt_desc}: {pe}")
+                        read_error = pe
+                        if i == len(delimiters_to_try) - 1: # If it's the last fallback attempt
+                             logger.error(f"Could not parse reference file '{os.path.basename(filepath)}' with any fallback delimiter after sniffing failed.")
+                             return None
+                    except Exception as e_fallback: # Catch other read errors during fallback
+                        logger.exception(f"Unexpected error reading reference file '{filepath}' with {attempt_desc}: {e_fallback}")
+                        read_error = e_fallback
+                        if i == len(delimiters_to_try) - 1: return None
+            except FileNotFoundError: # Should have been caught earlier, but safety check
+                 logger.error(f"Reference file not found during read attempt: {filepath}")
                  return None
-        except FileNotFoundError: # Should have been caught earlier, but safety check
-             logger.error(f"Reference file not found during read attempt: {filepath}")
-             return None
-        except Exception as e: # Catch other read errors (permissions, etc.)
-            logger.exception(f"Unexpected error reading reference file '{filepath}' with {attempt_desc}: {e}")
-            read_error = e
-            # If it's the last attempt, return None
-            if i == len(delimiters_to_try) - 1: return None
+            except Exception as e_sniff_or_read: # Catch other errors during initial sniff/read
+                logger.exception(f"Unexpected error reading reference file '{filepath}' (delimiter: {used_delimiter}): {e_sniff_or_read}")
+                read_error = e_sniff_or_read
+                return None
 
-    # If df is still None after trying all delimiters
-    if df is None or df.empty:
-        logger.error(f"Failed to read or DataFrame is empty for reference file '{filepath}'. Last error: {read_error}")
+    except pd.errors.EmptyDataError:
+        logger.error(f"Reference file '{os.path.basename(filepath)}' is empty or contains no data.")
+        return None
+    except pd.errors.ParserError as pe_user_delim:
+        logger.error(f"ParserError reading reference file '{os.path.basename(filepath)}' with specified delimiter '{used_delimiter}': {pe_user_delim}")
+        return None
+    except Exception as e_main_read: # Catch other general read errors
+        logger.exception(f"A critical error occurred while attempting to read reference file '{filepath}' (delimiter: {used_delimiter}): {e_main_read}")
         return None
 
-    # --- Process the DataFrame ---
+
+    # If df is still None or empty after all attempts
+    if df is None or df.empty:
+        log_message = f"Failed to read or DataFrame is empty for reference file '{filepath}'."
+        if read_error:
+            log_message += f" Last error: {read_error}"
+        logger.error(log_message)
+        return None
+
+    # --- Process the DataFrame (the rest of the function remains largely the same) ---
     try:
         # Normalize column names
         df.columns = [str(col).strip().lower() for col in df.columns]
@@ -211,9 +253,9 @@ def load_reference_usage(
         value_col_type: Optional[str] = None
 
         # Find Codon column
-        for col in original_columns:
-            if 'codon' in col:
-                codon_col = col
+        for col_name_iter in original_columns: # Renamed col to col_name_iter to avoid conflict
+            if 'codon' in col_name_iter:
+                codon_col = col_name_iter
                 break
         if not codon_col:
             logger.error("Could not find a 'Codon' column in reference file.")
@@ -227,22 +269,22 @@ def load_reference_usage(
              'count': ['count', 'number', 'total num', 'total']
         }
         for v_type, possible_names in priority_order.items():
-             if value_col_name: 
+             if value_col_name:
                 break # Stop if already found
-             for col in original_columns:
-                col_norm = col.replace('_', ' ').replace('-', ' ')
+             for col_name_iter in original_columns: # Renamed col to col_name_iter
+                col_norm = col_name_iter.replace('_', ' ').replace('-', ' ')
                 for name in possible_names:
                     if name in col_norm:
                         # Avoid matching 'frequency' if a 'per_thousand' column exists and v_type is 'freq'
                         if v_type == 'freq' and name == 'frequency' and \
                         any(pt_name in c.replace('_', ' ').replace('-', ' ') for c in original_columns for pt_name in priority_order['per_thousand']):
                             continue
-                        value_col_name = col
+                        value_col_name = col_name_iter # Use col_name_iter
                         value_col_type = v_type
                         break
-                if value_col_name: 
+                if value_col_name:
                     break
-
+        
         if not value_col_name or not value_col_type:
             logger.error(f"Could not find a suitable value column (e.g., RSCU, Frequency, Count) in columns: {original_columns}")
             return None
@@ -252,22 +294,54 @@ def load_reference_usage(
         # Select, rename, and ensure Value is numeric
         ref_df: pd.DataFrame = df[[codon_col, value_col_name]].copy()
         ref_df.rename(columns={codon_col: 'Codon', value_col_name: 'Value'}, inplace=True)
+        
+        # Convert 'Value' to numeric, coercing errors and logging how many rows were affected
+        initial_value_rows = len(ref_df)
         ref_df['Value'] = pd.to_numeric(ref_df['Value'], errors='coerce')
+        rows_with_nan_value = ref_df['Value'].isnull().sum()
+        
+        if rows_with_nan_value > 0:
+            logger.warning(
+                f"Found {rows_with_nan_value} non-numeric entries in value column '{value_col_name}' "
+                f"from reference file '{os.path.basename(filepath)}'. These rows will be dropped."
+            )
+            ref_df.dropna(subset=['Value'], inplace=True) # Drop rows where 'Value' became NaN
 
-        initial_rows: int = len(ref_df)
-        ref_df.dropna(subset=['Value'], inplace=True)
-        if len(ref_df) < initial_rows:
-             logger.warning(f"Dropped {initial_rows - len(ref_df)} rows from reference file due to non-numeric values in column '{value_col_name}'.")
+        if ref_df.empty:
+            logger.error(
+                f"No valid numeric data remaining in value column '{value_col_name}' "
+                f"from reference file '{os.path.basename(filepath)}' after coercing to numeric."
+            )
+            return None
+
 
         # Normalize codons (string, uppercase, T instead of U)
         ref_df['Codon'] = ref_df['Codon'].astype(str).str.upper().str.replace('U', 'T')
         # Filter invalid codon formats (ensure 3 letters ATCG)
+        # Also log how many were filtered
+        initial_codon_rows = len(ref_df)
         ref_df = ref_df[ref_df['Codon'].str.match(r'^[ATCG]{3}$')]
+        filtered_codon_rows = initial_codon_rows - len(ref_df)
+        if filtered_codon_rows > 0:
+            logger.warning(f"Filtered out {filtered_codon_rows} rows with invalid codon format from reference file.")
+
 
         # Map Amino Acids using provided genetic code
         ref_df['AminoAcid'] = ref_df['Codon'].map(genetic_code.get)
+        
+        # Log rows dropped due to unrecognized codons or stop codons
+        initial_aa_rows = len(ref_df)
         ref_df = ref_df.dropna(subset=['AminoAcid']) # Keep only codons recognized by the code
+        dropped_unrecognized_aa = initial_aa_rows - len(ref_df)
+        if dropped_unrecognized_aa > 0:
+            logger.warning(f"Dropped {dropped_unrecognized_aa} rows for codons not in the provided genetic code (ID: {genetic_code_id}).")
+
+        initial_stop_rows = len(ref_df)
         ref_df = ref_df[ref_df['AminoAcid'] != '*'] # Exclude stop codons
+        dropped_stop_codons = initial_stop_rows - len(ref_df)
+        if dropped_stop_codons > 0:
+            logger.info(f"Excluded {dropped_stop_codons} stop codon entries from reference data.")
+
 
         if ref_df.empty:
              logger.error("No valid coding codons found in reference file after filtering and mapping.")
@@ -342,9 +416,9 @@ def load_reference_usage(
             else:
                  # Handle single codon AAs (Met, Trp) or cases where max RSCU is invalid
                  # Assign weight 1.0 to all codons in such groups
-                 for codon in group.index:
-                     if codon not in calculated_weights: # Avoid overwriting if duplicates existed
-                          calculated_weights[codon] = 1.0
+                 for codon_index_iter in group.index: # Renamed codon to codon_index_iter
+                     if codon_index_iter not in calculated_weights: # Avoid overwriting if duplicates existed
+                          calculated_weights[codon_index_iter] = 1.0
 
         # Apply calculated weights and fill remaining NaNs (e.g., codons not in valid_rscu_df) with 1.0
         # Note: Should weights for codons missing from the reference be NaN or 1.0? Using 1.0 assumes neutral.
