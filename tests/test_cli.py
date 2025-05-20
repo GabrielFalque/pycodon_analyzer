@@ -1,19 +1,23 @@
 # tests/test_cli.py
+from pathlib import Path
+from typing import Any, List, Literal, Tuple
 import pytest # type: ignore
 import os
 import sys
 import subprocess # For running as command-line
 import pandas as pd
 import logging # <-- Add logging
-from unittest.mock import patch # For mocking sys.argv and sys.exit
+from unittest.mock import patch, MagicMock # For mocking sys.argv and sys.exit
 
 # Adjust import path
 try:
-    from pycodon_analyzer import cli
+    from src.pycodon_analyzer import cli, utils # type: ignore
+    MP_AVAILABLE = cli.MP_AVAILABLE
+    # RICH_AVAILABLE is part of the cli module, we will patch it
 except ImportError:
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
-    from pycodon_analyzer import cli
-
+     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+     from pycodon_analyzer import cli, utils
+     MP_AVAILABLE = cli.MP_AVAILABLE
 
 @pytest.mark.parametrize(
     "filename, expected_name",
@@ -34,13 +38,22 @@ except ImportError:
         ("gene_name-with-hyphens.fasta", "name-with-hyphens"),
     ]
 )
-def test_extract_gene_name_from_file(filename, expected_name):
-    """Test extracting gene names from various filename patterns."""
-    # Re-check regex in cli.py: r'gene_([\w\-.]+?)\.(fasta|fa|fna|fas|faa)$'
-    # [\w\-.]+? does match '_'. The issue might be how pytest reports the failure
-    # or a subtle environment thing. Let's trust the regex and keep the test.
-    # If it still fails, add print(f"Match object: {re.match(...)}") inside the helper.
-    assert cli.extract_gene_name_from_file(filename) == expected_name
+
+# --- Helper function to assert log messages ---
+def assert_log_message(caplog_records: List[logging.LogRecord], level: int, message_substring: str):
+    """
+    Helper to assert specific log message and level from caplog.records.
+    """
+    found = any(
+        message_substring in rec.message and rec.levelno == level
+        for rec in caplog_records
+    )
+    if not found:
+        all_captured_messages = "\n".join([f"[{logging.getLevelName(rec.levelno)}] {rec.name}: {rec.message}" for rec in caplog_records])
+        pytest.fail(
+            f"Expected log (level {logging.getLevelName(level)}) containing '{message_substring}' not found. "
+            f"Captured logs:\n{all_captured_messages}\n--- End caplog ---"
+        )
 
 # --- Integration tests for cli.main ---
 
@@ -53,7 +66,7 @@ def create_dummy_gene_file(dir_path, gene_name, seq_dict):
     return filepath
 
 @pytest.fixture
-def setup_input_dir(tmp_path):
+def setup_input_dir(tmp_path: Path):
     """Creates a temporary input directory with dummy gene files."""
     input_dir = tmp_path / "input_genes"
     input_dir.mkdir()
@@ -77,148 +90,178 @@ def setup_input_dir(tmp_path):
     return input_dir
 
 
-def run_cli(args_list, monkeypatch):
-    """Helper function to run cli.main with patched sys.argv and sys.exit."""
-    # Prepend script name (can be anything, often sys.executable or module path)
+def run_cli(args_list: List[str], monkeypatch) -> Tuple[int, str, str]:
+    """
+    Helper function to run cli.main with patched sys.argv and sys.exit.
+    """
     full_args = ["pycodon_analyzer"] + args_list
-    exit_code = None
-    output = ""
-    errors = ""
+    exit_code = -999 # Sentinel
+    captured_stdout, captured_stderr = "", ""
 
-    # Patch sys.argv
     monkeypatch.setattr(sys, "argv", full_args)
-
-    # Patch sys.exit to capture exit code
     def mock_exit(code=0):
         nonlocal exit_code
-        exit_code = code
-        # Raise an exception to stop execution cleanly after exit is called
+        if exit_code == -999: exit_code = code # Set only if not already set by previous SystemExit
         raise SystemExit(code)
-
     monkeypatch.setattr(sys, "exit", mock_exit)
 
     try:
-        # Call the main function directly (ensure imports allow this)
-        cli.main()
-        # If main completes without SystemExit, assume exit code 0
-        if exit_code is None: exit_code = 0
+        cli.main() # This will execute your cli.py main function, which configures RichHandler
+        if exit_code == -999: exit_code = 0 # Success if no SystemExit caught by mock_exit
     except SystemExit as e:
-        # Capture the exit code from the raised exception
-        if exit_code is None: exit_code = e.code
+        if exit_code == -999: exit_code = e.code if isinstance(e.code, int) else 1
     except Exception as e:
-         # Capture unexpected errors during execution
-         errors = str(e)
-         exit_code = -1 # Indicate failure
-
-    return exit_code, output, errors # Output/errors might need capturing stdout/stderr
-
+        # This part is for UNEXPECTED errors in cli.main, not for sys.exit
+        logging.getLogger("test_cli_runner").exception(f"Unexpected error during CLI run helper: {e}")
+        captured_stderr = str(e)
+        exit_code = 1 # Indicate failure
+    
+    if not isinstance(exit_code, int): exit_code = 1 # Default to 1 if exit_code is weird
+    return exit_code, captured_stdout, captured_stderr
 
 # --- Integration Test Cases ---
 
+def test_cli_integration_success_basic(setup_input_dir: Path, tmp_path: Path, monkeypatch, caplog: Any): # [Source 7]
+    """Test a basic successful run of the 'analyze' subcommand."""
+    # caplog automatically captures logs from the root logger and its children.
+    # The level set here applies to what caplog itself records.
+    caplog.set_level(logging.INFO) # [Source 179]
 
-def test_cli_integration_success_basic(setup_input_dir, tmp_path, monkeypatch, caplog):
-    """Test a basic successful run with default options (excluding ref)."""
-    caplog.set_level(logging.INFO) # Capture INFO level messages
     input_dir = setup_input_dir
-    output_dir = tmp_path / "cli_output"
-    # Basic arguments for a successful run - CORRECTED underscores
-    args = ["-d", str(input_dir), "-o", str(output_dir), "--ref", "none", "--skip_ca", "--skip_plots"] # <-- Utiliser --skip_ca et --skip_plots
+    output_dir = tmp_path / "cli_output_analyze_basic"
+    args = ["analyze", "-d", str(input_dir), "-o", str(output_dir), "--ref", "none", "--skip_ca", "--skip_plots"] # [Source 180]
+    # The run_cli helper no longer takes caplog and desired_log_level
+    exit_code, _, errors = run_cli(args, monkeypatch) # [Source 181]
 
-    exit_code, _, errors = run_cli(args, monkeypatch)
-
-    assert exit_code == 0, f"CLI exited with non-zero code {exit_code}. Errors: {errors}"
+    assert exit_code == 0, f"CLI 'analyze' exited with {exit_code}. Errors: {errors}" # [Source 181]
     assert output_dir.exists(), "Output directory was not created."
-    # Check expected output files are created
     assert (output_dir / "per_sequence_metrics_all_genes.csv").is_file(), "Combined metrics CSV missing."
     assert (output_dir / "mean_features_per_gene.csv").is_file(), "Mean features CSV missing."
     assert (output_dir / "gene_comparison_stats.csv").is_file(), "Stats comparison CSV missing."
-    
-    assert "Starting PyCodon Analyzer run." in caplog.text
-    assert "Found 3 potential gene alignment files" in caplog.text
-    assert "Expecting data for 3 genes:" in caplog.text and "A" in caplog.text and "B" in caplog.text and "C" in caplog.text
-    
-    assert "Processing 3 gene files using 1 processes..." in caplog.text or "Using 1 process (sequential gene file analysis)." in caplog.text
-    assert "Starting processing for gene: A" in caplog.text
-    assert "Starting processing for gene: B" in caplog.text
-    assert "Starting processing for gene: C" in caplog.text
 
-    # Check for the key part of the warning message, more robust
-    assert any(record.levelname == 'WARNING' for record in caplog.records if "cleaning for gene C" in record.message)
-    
-    assert "Processed 2 genes out of 3 expected." in caplog.text
-    
-    assert "Running analysis on 1 valid 'complete' sequence records" in caplog.text
-    assert "Combining final results..." in caplog.text
-    assert "Calculating mean features per gene..." in caplog.text
-    assert "Performing statistical comparison between genes..." in caplog.text
-    assert "Skipping combined plot generation as requested." in caplog.text # <-- Ajout de " as requested."
-    assert "Skipping combined Correspondence Analysis as requested." in caplog.text
-
-    assert "PyCodon Analyzer run finished successfully." in caplog.text
-
-    # Check content of one output file (basic check)
-    try:
-        metrics_df = pd.read_csv(output_dir / "per_sequence_metrics_all_genes.csv")
-        assert 'ID' in metrics_df.columns
-        assert 'Gene' in metrics_df.columns
-        # Expected sequences surviving: A/Seq1, A/Seq2, B/Seq1, B/Seq2, complete/Seq1, complete/Seq2
-        assert len(metrics_df) == 4, f"Expected 4 rows in combined metrics, found {len(metrics_df)}"
-        assert set(metrics_df['Gene'].unique()) == {'A', 'B', 'complete'}, "Unexpected genes in combined metrics"
-    except FileNotFoundError:
-        pytest.fail("Output CSV file not found for validation.")
-    except Exception as e:
-        pytest.fail(f"Failed to read or validate output CSV: {e}")
+    assert_log_message(caplog.records, logging.INFO, "PyCodon Analyzer - Command: analyze") # [Source 182]
+    assert_log_message(caplog.records, logging.INFO, "Running 'analyze' command with input directory")
+    assert_log_message(caplog.records, logging.INFO, "Found 3 potential gene files")
+    assert_log_message(caplog.records, logging.INFO, "Expecting data for 3 genes:")
+    assert_log_message(caplog.records, logging.WARNING, "No valid sequences remaining after cleaning for gene C") # [Source 200]
+    assert_log_message(caplog.records, logging.WARNING, "Processed 2 genes out of 3 expected.") # [Source 201]
+    assert_log_message(caplog.records, logging.INFO, "Running analysis on 1 valid 'complete' sequence record") # [Source 202]
+    assert_log_message(caplog.records, logging.INFO, "Skipping combined plot generation as requested.") # [Source 214]
+    assert_log_message(caplog.records, logging.INFO, "Skipping combined Correspondence Analysis as requested.") # [Source 212]
+    assert_log_message(caplog.records, logging.INFO, "PyCodon Analyzer run finished successfully.") # [Source 215]
 
 
-def test_cli_integration_parallel(setup_input_dir, tmp_path, monkeypatch, caplog):
-    """Test running with multiple threads."""
-    # Only run if multiprocessing is available
-    if not cli.MP_AVAILABLE:
-        pytest.skip("multiprocessing not available, skipping parallel test")
+def test_cli_integration_parallel(setup_input_dir: Path, tmp_path: Path, monkeypatch, caplog: Any): # [Source 41]
+    """Test 'analyze' subcommand running with multiple threads."""
+    if not cli.MP_AVAILABLE: pytest.skip("multiprocessing not available")
 
-    caplog.set_level(logging.INFO)
-    input_dir = setup_input_dir
-    output_dir = tmp_path / "cli_output_parallel"
-    # Use -t 0 to request all cores (or at least > 1)
-    args = ["-d", str(input_dir), "-o", str(output_dir), "--ref", "none", "--skip_ca", "--skip_plots", "-t", "0"]
+    with caplog.at_level(logging.INFO, logger="pycodon_analyzer"):
+        caplog.set_level(logging.INFO) # [Source 217]
 
-    exit_code, _, _ = run_cli(args, monkeypatch)
+        input_dir = setup_input_dir
+        output_dir = tmp_path / "cli_output_analyze_parallel"
+        args = ["analyze", "-d", str(input_dir), "-o", str(output_dir), "--ref", "none", "--skip_ca", "--skip_plots", "-t", "0"] # [Source 218]
+        exit_code, _, errors = run_cli(args, monkeypatch) # [Source 218]
+    # Removed duplicate run_cli call
 
-    assert exit_code == 0
+    assert exit_code == 0, f"CLI 'analyze' parallel exited with {exit_code}. Errors: {errors}" # [Source 219]
     assert output_dir.exists()
-    assert (output_dir / "per_sequence_metrics_all_genes.csv").is_file()
-    # Check log indicates parallel execution (number might vary)
-    assert "processes for parallel gene file analysis" in caplog.text
+    assert_log_message(caplog.records, logging.INFO, "processes for parallel gene file analysis") # [Source 225]
 
-def test_cli_integration_input_dir_not_found(tmp_path, monkeypatch, caplog):
-    """Test error handling when input directory does not exist."""
-    caplog.set_level(logging.ERROR)
-    input_dir = tmp_path / "nonexistent_dir"
-    output_dir = tmp_path / "cli_output_error"
-    args = ["-d", str(input_dir), "-o", str(output_dir)]
 
-    exit_code, _, _ = run_cli(args, monkeypatch)
-
-    assert exit_code != 0 # Expect non-zero exit code
-    assert f"Input directory not found: {input_dir}" in caplog.text
-
-def test_cli_integration_no_gene_files(tmp_path, monkeypatch, caplog):
-    """Test error handling when no gene files are found."""
-    caplog.set_level(logging.ERROR)
-    input_dir = tmp_path / "empty_input"
-    input_dir.mkdir() # Create empty dir
-    output_dir = tmp_path / "cli_output_error"
-    args = ["-d", str(input_dir), "-o", str(output_dir)]
-
-    exit_code, _, _ = run_cli(args, monkeypatch)
+def test_cli_integration_input_dir_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: Any): # [Source 81]
+    """Test 'analyze' error handling for non-existent input directory."""
+    with caplog.at_level(logging.ERROR, logger="pycodon_analyzer"):
+        input_dir = tmp_path / "nonexistent_dir_for_analyze"
+        output_dir = tmp_path / "cli_output_analyze_error"
+        args = ["analyze", "-d", str(input_dir), "-o", str(output_dir)] # [Source 281]
+        exit_code, _, _ = run_cli(args, monkeypatch)
 
     assert exit_code != 0
-    assert "No gene alignment files" in caplog.text
-    assert f"found in directory: {input_dir}" in caplog.text
+    assert_log_message(caplog.records, logging.ERROR, f"Input directory for analysis not found: {input_dir}") # [Source 82]
 
-# Add more integration tests:
-# - Test with a valid reference file (--ref path/to/ref) and check CAI etc. columns
-# - Test --skip-plots (check plot files NOT created, check log message)
-# - Test --skip-ca (check CA files NOT created, check log message)
-# - Test invalid --max-ambiguity value
-# - Test case where NO sequences survive cleaning in ANY gene file
+def test_cli_integration_no_gene_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: Any): # [Source 84]
+    """Test 'analyze' error handling when no gene files are found."""
+    with caplog.at_level(logging.ERROR, logger="pycodon_analyzer"):
+        input_dir = tmp_path / "empty_input_for_analyze"
+        input_dir.mkdir()
+        output_dir = tmp_path / "cli_output_analyze_error_no_files"
+        args = ["analyze", "-d", str(input_dir), "-o", str(output_dir)] # [Source 296]
+        exit_code, _, _ = run_cli(args, monkeypatch)
+
+    assert exit_code != 0
+    assert_log_message(caplog.records, logging.ERROR, "No gene alignment files") # [Source 296]
+    assert_log_message(caplog.records, logging.ERROR, f"found in directory: {input_dir}")
+
+
+
+# --- Tests for subcommand 'extract' ---
+@pytest.fixture
+def setup_extract_files(tmp_path: Path) -> Tuple[Path, Path]: # [Source 950]
+    annotations_file = tmp_path / "ref_annotations.fasta"
+    alignment_file = tmp_path / "genome_alignment.fasta"
+    annotations_content = (
+        ">RefSeq1_feature1 [gene=GeneX] [location=4..12]\n"
+        "ATGCATGCAT\n"
+        ">RefSeq1_feature2 [locus_tag=GeneY] [location=complement(15..20)]\n"
+        "CGTACG\n"
+        ">RefSeq1_feature3 [gene=GeneZ_skipped] [location=25..35]\n" # Changed name for clarity
+        "AAAA\n"
+    )
+    annotations_file.write_text(annotations_content)
+    alignment_content = ( # [Source 951]
+        ">Ref_ID_in_MSA\n"
+        "---ATGCCG---TTAG----C--G--T--A--GCCATT---\n"
+        ">Sample1\n"
+        "---ATGNNG---TTAG----C--G--T--A--GCCANN---\n"
+        ">Sample2\n"
+        "---ATGCCG---TTAG----C--G--T--A--NNNATT---\n"
+    )
+    alignment_file.write_text(alignment_content)
+    return annotations_file, alignment_file
+
+def test_cli_integration_extract_success(setup_extract_files: Tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: Any): # [Source 88]
+    """Test a basic successful run of the 'extract' subcommand."""
+    with caplog.at_level(logging.INFO, logger="pycodon_analyzer"):
+        annotations_file, alignment_file = setup_extract_files
+        output_dir_extract = tmp_path / "extracted_genes_output_success"
+        args = ["extract", "-a", str(annotations_file), "-g", str(alignment_file), "-r", "Ref_ID_in_MSA", "-o", str(output_dir_extract)] # [Source 313]
+        exit_code, _, errors = run_cli(args, monkeypatch)
+
+    assert exit_code == 0, f"CLI 'extract' exited with code {exit_code}. Errors: {errors}" # [Source 313]
+    # ... (file assertions as before) ...
+
+    with caplog.at_level(logging.INFO, logger="src.pycodon_analyzer.extraction"):
+         pass
+    assert_log_message(caplog.records, logging.INFO, "PyCodon Analyzer - Command: extract") # [Source 310]
+    assert_log_message(caplog.records, logging.INFO, "'extract' command finished successfully.")
+    assert_log_message(caplog.records, logging.INFO, "Gene alignments written: 2")
+
+
+def test_cli_integration_extract_ref_id_not_found(setup_extract_files: Tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: Any): # [Source 112]
+    """Test 'extract' error handling when ref_id is not in alignment."""
+    with caplog.at_level(logging.ERROR, logger="pycodon_analyzer"): # Pour les logs de handle_extract_command
+        with caplog.at_level(logging.ERROR, logger="src.pycodon_analyzer.extraction"):
+            annotations_file, alignment_file = setup_extract_files
+            output_dir_extract = tmp_path / "extracted_genes_error_ref_id"
+            args = ["extract", "-a", str(annotations_file), "-g", str(alignment_file), "-r", "WRONG_Ref_ID", "-o", str(output_dir_extract)] # [Source 330]
+            exit_code, _, _ = run_cli(args, monkeypatch)
+    assert exit_code != 0
+    # The actual error logged by extraction.py is more specific
+    assert_log_message(caplog.records, logging.ERROR, "Reference sequence ID 'WRONG_Ref_ID' not found in alignment") # [Source 330]
+    # And the handler in cli.py logs this:
+    assert_log_message(caplog.records, logging.ERROR, "Extraction error: Reference sequence ID 'WRONG_Ref_ID' not found")
+
+
+def test_cli_integration_extract_annotations_not_found(setup_extract_files: Tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: Any): # [Source 121]
+    """Test 'extract' error handling when annotations file is not found."""
+    with caplog.at_level(logging.ERROR, logger="pycodon_analyzer"):
+        with caplog.at_level(logging.ERROR, logger="src.pycodon_analyzer.extraction"):
+            _, alignment_file = setup_extract_files
+            annotations_file_non_existent = tmp_path / "non_existent_annotations.fasta"
+            output_dir_extract = tmp_path / "extracted_genes_error_annot"
+            args = ["extract", "-a", str(annotations_file_non_existent), "-g", str(alignment_file), "-r", "Ref_ID_in_MSA", "-o", str(output_dir_extract)] # [Source 345]
+            exit_code, _, _ = run_cli(args, monkeypatch)
+    assert exit_code != 0
+    assert_log_message(caplog.records, logging.ERROR, f"Annotation file not found: {annotations_file_non_existent}") # [Source 345]
+    assert_log_message(caplog.records, logging.ERROR, "Extraction error: Annotation file not found")

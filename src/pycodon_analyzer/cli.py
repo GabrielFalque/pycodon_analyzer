@@ -1087,27 +1087,52 @@ def main() -> None:
     # --- Parse Arguments ---
     args = parser.parse_args()
 
-    # --- Configure Logging (based on global -v) ---
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    # Use RichHandler for nicer console logging if Rich is available
-    handler_to_use: logging.Handler = RichHandler(rich_tracebacks=True, 
-                                                  show_path=False, 
-                                                  markup=True, 
-                                                  show_level=True) if RICH_AVAILABLE else logging.StreamHandler()
-    formatter = logging.Formatter("%(message)s" if RICH_AVAILABLE else "%(asctime)s - %(levelname)s - %(name)s - %(message)s", datefmt="[%X]")
-    handler_to_use.setFormatter(formatter)
-    handler_to_use.setLevel(log_level)
 
-    root_logger = logging.getLogger() # Get root logger
-    root_logger.setLevel(log_level) # Set level on root
-    if root_logger.hasHandlers(): # Clear existing default handlers
-        for h in root_logger.handlers[:]: 
-            root_logger.removeHandler(h)
-    root_logger.addHandler(handler_to_use) # Add RichHandler (or StreamHandler fallback)
+    # Only configure logging if not in a test environment that handles it
+    if RICH_AVAILABLE:
+        handler_to_use: logging.Handler = RichHandler(
+            rich_tracebacks=True, show_path=False, markup=True, show_level=True, log_time_format="[%X]"
+        )
+        # Pour RichHandler, le formateur est souvent plus simple car Rich gère les détails
+        formatter = logging.Formatter("%(message)s", datefmt="[%X]") # Le nom du logger sera ajouté par RichHandler
+        handler_to_use.setFormatter(formatter)
+    else:
+        # Fallback pour les tests ou si Rich n'est pas là
+        handler_to_use = logging.StreamHandler(sys.stderr) # Écrit sur stderr
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        handler_to_use.setFormatter(formatter)
 
-    logger.info(f"PyCodon Analyzer - Command: {args.command}")
-    if args.verbose: # Log full args only if verbose
+    # Configurer le logger spécifique de l'application
+    # NE PAS configurer le root logger directement avec basicConfig si caplog doit fonctionner de manière prévisible
+    logger.setLevel(log_level)
+    
+    # S'assurer qu'il n'y a pas de handlers dupliqués si main() est appelé plusieurs fois (peu probable ici)
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    logger.addHandler(handler_to_use)
+
+    # Empêcher les messages de remonter au logger racine si on gère tout ici
+    #logger.propagate = False # Essayez avec et sans cette ligne
+
+    # Les tests avec caplog s'attachent généralement au root logger.
+    # Si on ne configure que notre logger "pycodon_analyzer", il faut que caplog soit configuré pour l'écouter.
+    # Par défaut, caplog écoute le root logger. Si notre logger "pycodon_analyzer" propage
+    # ses messages au root (ce qui est le comportement par défaut si propagate=True),
+    # ET si le root logger a un niveau qui permet aux messages de passer, caplog devrait les voir.
+
+    # Pour s'assurer que caplog voit quelque chose, configurons aussi le root logger
+    # de manière minimale SANS RichHandler pour que caplog puisse s'y fier.
+    # Ou, mieux, dans les tests, on dira à caplog d'écouter "pycodon_analyzer".
+
+    # Le logger spécifique de l'application utilisera cette configuration racine
+    #logger = logging.getLogger("pycodon_analyzer")
+    # logger.setLevel(log_level) # Not strictly necessary if root is set and propagate is True
+
+    logger.info(f"PyCodon Analyzer - Command: {args.command}") # This should be from "pycodon_analyzer"
+    if args.verbose:
         logger.debug(f"Full arguments: {args}")
+
 
     # --- Execute the function associated with the subcommand ---
     if hasattr(args, 'func'):
