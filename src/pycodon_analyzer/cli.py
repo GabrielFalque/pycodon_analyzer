@@ -342,73 +342,106 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
 
     # --- Load Reference Usage File ---
     reference_weights: Optional[Dict[str, float]] = None
-    reference_data_for_plot: Optional[pd.DataFrame] = None # For plot_usage_comparison
+    reference_data_for_plot: Optional[pd.DataFrame] = None
+    # New parameter for load_reference_usage (if added it, though not strictly necessary for this specific fix)
+    # specified_delimiter = getattr(args, 'ref_delimiter', None) # Example if you add a --ref_delimiter arg
 
     if args.reference_usage_file and args.reference_usage_file.lower() != 'none':
         ref_path_to_load: Optional[str] = None
         if args.reference_usage_file.lower() == 'human':
-            ref_path_to_load = DEFAULT_HUMAN_REF_PATH # Uses the globally resolved path
+            ref_path_to_load = DEFAULT_HUMAN_REF_PATH
             if not ref_path_to_load or not os.path.isfile(ref_path_to_load):
-                 logger.warning("Default human reference file ('human') requested but not found or path invalid. Check installation or provide path.")
-                 ref_path_to_load = None
+                 logger.error("Default human reference file ('human') requested but not found or path invalid. Exiting.") # More critical
+                 sys.exit(1) # Exit if critical reference is missing
         elif os.path.isfile(args.reference_usage_file):
             ref_path_to_load = args.reference_usage_file
         else:
-            logger.warning(f"Specified reference file not found: {args.reference_usage_file}.")
+            logger.error(f"Specified reference file not found: {args.reference_usage_file}. Exiting.") # More critical
+            sys.exit(1) # Exit if specified reference is missing
 
-        if ref_path_to_load:
+        if ref_path_to_load: # This will only be true if a valid path was determined above
             logger.info(f"Loading codon usage reference table: {ref_path_to_load}...")
             try:
                 current_genetic_code: Dict[str, str] = utils.get_genetic_code(args.genetic_code)
-                reference_data_for_plot = utils.load_reference_usage(ref_path_to_load, current_genetic_code, args.genetic_code)
+                # Pass the delimiter if added it to load_reference_usage and CLI args
+                # reference_data_for_plot = utils.load_reference_usage(
+                #     ref_path_to_load, current_genetic_code, args.genetic_code, delimiter=specified_delimiter
+                # )
+                reference_data_for_plot = utils.load_reference_usage(
+                    ref_path_to_load, current_genetic_code, args.genetic_code
+                )
+
 
                 if reference_data_for_plot is not None and not reference_data_for_plot.empty:
                     if 'Weight' in reference_data_for_plot.columns:
                         reference_weights = reference_data_for_plot['Weight'].to_dict()
                         logger.info("Reference data loaded and weights extracted successfully.")
                     else:
-                        logger.error("'Weight' column missing in loaded reference data. CAI/Fop/RCDI may fail or produce NaNs.")
-                        reference_data_for_plot = None
+                        logger.error("'Weight' column missing in loaded reference data. CAI/Fop/RCDI may fail or produce NaNs. Exiting.")
+                        sys.exit(1) # Critical if reference was intended to be used for weights
                 else:
-                    logger.warning("Failed to process reference data after reading. CAI/Fop/RCDI will use NaN.")
-                    reference_data_for_plot = None # Ensure it's None if processing failed
-            except (NotImplementedError, ValueError) as ref_err: # Catch errors from get_genetic_code or load_reference_usage
-                 logger.error(f"Error loading/processing reference file {ref_path_to_load}: {ref_err}")
-                 reference_weights = None; reference_data_for_plot = None
-            except Exception as load_err: # Catch other unexpected errors
-                 logger.exception(f"Unexpected error loading reference file {ref_path_to_load}: {load_err}")
-                 reference_weights = None; reference_data_for_plot = None
+                    logger.error("Failed to load or process reference data. CAI/Fop/RCDI will use NaN or fail. Exiting.")
+                    sys.exit(1) # Critical if reference loading failed
+            except (NotImplementedError, ValueError) as ref_err:
+                 logger.error(f"Error loading/processing reference file {ref_path_to_load}: {ref_err}. Exiting.")
+                 sys.exit(1)
+            except Exception as load_err:
+                 logger.exception(f"Unexpected error loading reference file {ref_path_to_load}: {load_err}. Exiting.")
+                 sys.exit(1)
     else:
-         logger.info("No reference file specified. Reference-based calculations (CAI/Fop/RCDI) will be skipped or result in NaN.")
+         logger.info("No reference file specified or '--ref none'. Reference-based calculations (CAI/Fop/RCDI) will be skipped or result in NaN.")
+
+    # --- Find gene alignment files ---
+    logger.info(f"Searching for gene_*.fasta files in: {args.directory}")
+    # Assuming glob and os are imported
+    gene_files: List[str] = glob.glob(os.path.join(args.directory, "gene_*.*"))
+    valid_extensions: Set[str] = {".fasta", ".fa", ".fna", ".fas", ".faa"}
+    gene_files = sorted([f for f in gene_files if os.path.splitext(f)[1].lower() in valid_extensions])
+
+    if not gene_files:
+        logger.error(f"No gene alignment files (matching 'gene_*' with valid extensions) found in directory: {args.directory}")
+        sys.exit(1) # Exit if no input files
+
+    # --- Determine expected gene names ---
+    expected_gene_names: Set[str] = set()
+    for fpath in gene_files:
+        # Assuming extract_gene_name_from_file is defined in this file or imported
+        gname = extract_gene_name_from_file(fpath)
+        if gname: expected_gene_names.add(gname)
+
+    if not expected_gene_names:
+        logger.error("Could not extract any valid gene names from input filenames. Check naming pattern (gene_NAME.fasta). Exiting.")
+        sys.exit(1) # Exit if no valid gene names can be parsed
+
+    logger.info(f"Expecting data for {len(expected_gene_names)} genes: {', '.join(sorted(list(expected_gene_names)))}")
+
+
+    # --- Output Directory Creation ---
+    # Now that essential validations (reference file, input files, gene names) have passed,
+    # it's safer to create the output directory.
+    try:
+        os.makedirs(args.output, exist_ok=True)
+        logger.info(f"Output directory '{args.output}' created or already exists. Results will be saved here.")
+    except OSError as e:
+        logger.error(f"Error creating output directory '{args.output}': {e}. Exiting.")
+        sys.exit(1) # Critical error if output directory cannot be created
+
 
     # --- Determine number of processes ---
     num_file_processes: int = args.threads
     if num_file_processes <= 0:
         if MP_AVAILABLE:
-            try: 
+            try:
                 num_file_processes = os.cpu_count() or 1
-            except NotImplementedError: 
+            except NotImplementedError:
                 num_file_processes = 1
                 logger.warning("Could not determine CPU count, using 1 process.")
-        else: 
+        else:
             num_file_processes = 1
     if num_file_processes > 1 and not MP_AVAILABLE:
         logger.warning(f"Requested {num_file_processes} processes, but multiprocessing is not available. Using 1 process.")
         num_file_processes = 1
-    # Initial log, actual number might be capped by len(gene_files) later
-    logger.info(f"User requested/configured {num_file_processes} process(es) for gene file analysis.")
-
-    # --- Find gene alignment files ---
-    logger.info(f"Searching for gene_*.fasta files in: {args.directory}")
-    gene_files: List[str] = glob.glob(os.path.join(args.directory, "gene_*.*"))
-    valid_extensions: Set[str] = {".fasta", ".fa", ".fna", ".fas", ".faa"} # Define valid extensions
-    gene_files = sorted([f for f in gene_files if os.path.splitext(f)[1].lower() in valid_extensions])
-
-    if not gene_files:
-        logger.error(f"No gene alignment files (matching 'gene_*' with valid extensions) found in directory: {args.directory}")
-        sys.exit(1)
-
-    # Cap number of processes by the number of files
+    
     original_requested_processes = num_file_processes
     num_file_processes = min(num_file_processes, len(gene_files))
     if num_file_processes < original_requested_processes and original_requested_processes > 1:
@@ -956,8 +989,27 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
 def handle_extract_command(args: argparse.Namespace) -> None:
     """Handles the 'extract' subcommand and its arguments."""
     logger.info(f"Running 'extract' command. Annotations: {args.annotations}, Alignment: {args.alignment}, Output: {args.output_dir}")
+
+    # --- Validate input files before creating output directory ---
+    if not args.annotations.is_file():
+        logger.error(f"Annotation file not found: {args.annotations}. Exiting.")
+        sys.exit(1)
+    if not args.alignment.is_file():
+        logger.error(f"Alignment file not found: {args.alignment}. Exiting.")
+        sys.exit(1)
+    
+    # --- Deferred Output Directory Creation ---
+    try:
+        # args.output_dir is a Path object from argparse
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Output directory '{args.output_dir}' created or already exists for extracted genes.")
+    except OSError as e:
+        logger.error(f"Error creating output directory '{args.output_dir}': {e}. Exiting.")
+        sys.exit(1)
+
     try:
         # Call the main extraction function from the extraction module
+        # Assuming extraction module is imported
         extraction.extract_gene_alignments_from_genome_msa(
             annotations_path=args.annotations,
             alignment_path=args.alignment,
@@ -965,10 +1017,10 @@ def handle_extract_command(args: argparse.Namespace) -> None:
             output_dir=args.output_dir
         )
         logger.info("'extract' command finished successfully.")
-    except FileNotFoundError as fnf_err:
+    except FileNotFoundError as fnf_err: # Should be caught by earlier checks, but defensive
         logger.error(f"Extraction error: {fnf_err}")
         sys.exit(1)
-    except ValueError as val_err: # For parsing or data integrity errors
+    except ValueError as val_err: # For parsing or data integrity errors from extraction module
         logger.error(f"Extraction error: {val_err}")
         sys.exit(1)
     except Exception as e:
