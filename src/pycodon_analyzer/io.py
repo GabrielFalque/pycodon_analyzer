@@ -24,16 +24,20 @@ except ImportError:
     print("ERROR: Biopython is not installed or cannot be found. Please install it (`pip install biopython`).", file=sys.stderr)
     sys.exit(1)
 
+# --- Configure logging for this module ---
+logger = logging.getLogger(__name__)
+
 # Import constants from utils (assuming utils.py is correctly structured)
 try:
     from .utils import VALID_DNA_CHARS
 except ImportError:
-    # Fallback if run standalone or structure issue, less robust
-    print("Warning: Could not import VALID_DNA_CHARS from .utils. Using basic DNA set.", file=sys.stderr)
-    VALID_DNA_CHARS: Set[str] = set('ATCGN-')
+    # Fallback if run standalone or structure issue. Use logger here.
+    logger.warning(
+        "Could not import VALID_DNA_CHARS from .utils. Using a basic DNA character set. "
+        "This might affect sequence validation if custom VALID_DNA_CHARS was intended."
+    )
+    VALID_DNA_CHARS: Set[str] = set('ATCGN-') # Default fallback
 
-# --- Configure logging for this module ---
-logger = logging.getLogger(__name__)
 
 
 def read_fasta(filepath: str) -> List[SeqRecord]:

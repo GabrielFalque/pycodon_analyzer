@@ -49,25 +49,30 @@ else:
 
 from functools import partial
 
+# --- Configure logging for this module ---
+logger = logging.getLogger(__name__)
+
 # --- Local modules ---
 try:
     from .utils import (get_genetic_code, get_synonymous_codons,
                         VALID_CODON_CHARS, KYTE_DOOLITTLE_HYDROPATHY)
 except ImportError as e:
-    # Use logger here if possible, but it might not be configured yet
-    print(f"ERROR: Failed importing from .utils: {e}. Check package structure/installation.", file=sys.stderr)
-    # Define minimal fallbacks if needed for the script to load, though functionality will be broken
-    STANDARD_GENETIC_CODE: Dict[str, str] = {}
-    VALID_CODON_CHARS: set[str] = set('ATCG')
-    KYTE_DOOLITTLE_HYDROPATHY: Dict[str, float] = {}
-    def get_genetic_code(code_id: int = 1) -> Dict[str, str]: return STANDARD_GENETIC_CODE
-    def get_synonymous_codons(gc: Dict[str, str]) -> Dict[str, List[str]]: return {}
-    # Exit if core utilities cannot be loaded? Or let subsequent code fail?
-    # sys.exit("Core utilities could not be imported.")
+    logger.critical(
+        f"CRITICAL ERROR: Failed importing from .utils: {e}. "
+        "Core functionalities of the analysis module will be broken. "
+        "Check package structure/installation."
+    )
+    # Define minimal fallbacks if needed for the script to load,
+    # though functionality will be severely limited.
+    STANDARD_GENETIC_CODE: Dict[str, str] = {} # type: ignore
+    VALID_CODON_CHARS: Set[str] = set('ATCG') # type: ignore
+    KYTE_DOOLITTLE_HYDROPATHY: Dict[str, float] = {} # type: ignore
+    def get_genetic_code(code_id: int = 1) -> Dict[str, str]: return STANDARD_GENETIC_CODE # type: ignore
+    def get_synonymous_codons(gc: Dict[str, str]) -> Dict[str, List[str]]: return {} # type: ignore
+    # Consider re-raising the error or sys.exit if these fallbacks are insufficient
+    # raise e # Or sys.exit("Core utilities could not be imported in analysis module.")
 
 
-# --- Configure logging for this module ---
-logger = logging.getLogger(__name__)
 
 
 # === Nucleotide and Dinucleotide Frequency Calculations ===
