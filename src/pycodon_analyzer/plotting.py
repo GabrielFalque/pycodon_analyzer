@@ -14,7 +14,7 @@ import os
 import sys
 import logging # <-- Import logging
 import traceback # Keep for detailed error logging if needed via logger.exception
-from typing import List, Dict, Optional, Any, Tuple, Set, Union
+from typing import List, Dict, Optional, Any, Tuple, Set, Union, TYPE_CHECKING
 
 
 # Third-party library imports with error handling for optional ones
@@ -46,22 +46,28 @@ except ImportError:
     print("CRITICAL ERROR: numpy is required but not installed. Please install it (`pip install numpy`).", file=sys.stderr)
     sys.exit(1)
 
-try:
-    from scipy import stats as stats
+if TYPE_CHECKING:
+    from scipy import stats as scipy_stats_module # For type checking if used
     SCIPY_AVAILABLE = True
-except ImportError:
-    print("CRITICAL ERROR: scipy.stats is required but not installed. Please install it (`pip install scipy`).", file=sys.stderr)
-    SCIPY_AVAILABLE = False
-    stats = None # Mock or placeholder
-    sys.exit(1)
+    # ScipyStatsModule = type(scipy.stats) # More precise if needed
+else:
+    try:
+        from scipy import stats as scipy_stats_module
+        SCIPY_AVAILABLE = True
+    except ImportError:
+        SCIPY_AVAILABLE = False
+        scipy_stats_module = None # Runtime check
 
 # Optional: Try importing prince for type hinting if needed
-try:
-    import prince
-    PrinceCA = prince.CA # Alias for typing
-except ImportError:
-    prince = None
-    PrinceCA = Any # Fallback type
+if TYPE_CHECKING:
+    import prince # Import only for type checking
+    PrinceCA = prince.CA # Actual type for type checker
+else:
+    PrinceCA = Any # Fallback type for runtime
+    try:
+        import prince
+    except ImportError:
+        prince = None # Set to None if not found
 
 try:
     from adjustText import adjust_text
@@ -410,9 +416,9 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
         # Overall regression line (only if enough points)
         slope, intercept, r_value, p_value, std_err = np.nan, np.nan, np.nan, np.nan, np.nan
         r_squared = np.nan
-        if len(plot_df_valid) >= 2 and stats is not None: # Check if scipy.stats was imported
+        if len(plot_df_valid) >= 2 and scipy_stats_module is not None: # Check if scipy.stats was imported
             try:
-                 slope, intercept, r_value, p_value, std_err = stats.linregress(plot_df_valid['GC3_num'], plot_df_valid['GC12_num'])
+                 slope, intercept, r_value, p_value, std_err = scipy_stats_module.linregress(plot_df_valid['GC3_num'], plot_df_valid['GC12_num'])
                  r_squared = r_value**2 if pd.notna(r_value) else np.nan
                  x_range = np.array([plot_df_valid['GC3_num'].min(), plot_df_valid['GC3_num'].max()])
                  y_vals = intercept + slope * x_range
@@ -420,7 +426,7 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
             except (ValueError, TypeError) as lin_reg_err:
                  logger.warning(f"Could not calculate overall regression for Neutrality plot: {lin_reg_err}")
                  slope, r_squared = np.nan, np.nan
-        elif len(plot_df_valid) >= 2 and stats is None:
+        elif len(plot_df_valid) >= 2 and scipy_stats_module is None:
              logger.warning("Cannot calculate regression line for Neutrality plot: scipy.stats not available.")
 
 
@@ -663,7 +669,7 @@ def plot_ca_contribution(ca_results: PrinceCA, dimension: int, n_top: int, outpu
         output_dir (str): Directory to save the plot.
         file_format (str): Plot file format.
     """
-    if ca_results is None or prince is None or not isinstance(ca_results, prince.CA):
+    if prince is None or ca_results is None or not isinstance(ca_results, prince.CA): # Runtime check against imported module
         logger.warning("No valid CA results (or prince library missing) available for contribution plot.")
         return
     if not hasattr(ca_results, 'column_contributions_'):
@@ -743,8 +749,8 @@ def plot_ca_variance(ca_results: PrinceCA, n_dims: int, output_dir: str, file_fo
         output_dir (str): Directory to save the plot.
         file_format (str): Plot file format.
     """
-    if ca_results is None or prince is None or not isinstance(ca_results, prince.CA):
-        logger.warning("No valid CA results (or prince library missing) for variance plot.")
+    if prince is None or ca_results is None or not isinstance(ca_results, prince.CA): # Runtime check against imported module
+        logger.warning("No valid CA results (or prince library missing) available for contribution plot.")
         return
     if not hasattr(ca_results, 'eigenvalues_summary'):
         logger.error("CA results object missing 'eigenvalues_summary'. Cannot plot variance.")
@@ -864,8 +870,8 @@ def plot_ca(
         filename_suffix (str): Suffix to add to the output filename. Default "".
         palette (Optional[Dict[str, Any]]): Palette for gene colors.
     """
-    if ca_results is None or prince is None or not isinstance(ca_results, prince.CA):
-        logger.warning("No valid CA results (or prince library missing) to plot.")
+    if prince is None or ca_results is None or not isinstance(ca_results, prince.CA): # Runtime check against imported module
+        logger.warning("No valid CA results (or prince library missing) available for contribution plot.")
         return
     if ca_input_df is None or ca_input_df.empty:
          logger.error("CA input DataFrame needed for plotting coordinates is missing or empty.")
@@ -1614,12 +1620,12 @@ def plot_ca_axes_feature_correlation(
                         continue
                     try:
                         if method_name.lower() == 'spearman':
-                            corr, pval = stats.spearmanr(ca_dim_data[common_mask], feature_data[common_mask])
+                            corr, pval = scipy_stats_module.spearmanr(ca_dim_data[common_mask], feature_data[common_mask])
                         elif method_name.lower() == 'pearson':
-                            corr, pval = stats.pearsonr(ca_dim_data[common_mask], feature_data[common_mask])
+                            corr, pval = scipy_stats_module.pearsonr(ca_dim_data[common_mask], feature_data[common_mask])
                         else:
                             logger.warning(f"Unsupported correlation method '{method_name}'. Defaulting to Spearman.")
-                            corr, pval = stats.spearmanr(ca_dim_data[common_mask], feature_data[common_mask])
+                            corr, pval = scipy_stats_module.spearmanr(ca_dim_data[common_mask], feature_data[common_mask])
                         all_corr_coeffs[ca_dim_col][feature] = corr
                         all_p_values[ca_dim_col][feature] = pval
                     except ValueError as spe_err:

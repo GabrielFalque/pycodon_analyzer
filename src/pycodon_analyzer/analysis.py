@@ -14,7 +14,7 @@ import sys
 import logging # <-- Import logging
 import math # For log, exp in CAI, etc.
 from collections import Counter
-from typing import List, Dict, Optional, Set, Tuple, Any, Union # <-- Import typing helpers
+from typing import List, Dict, Optional, Set, Tuple, Any, Union, TYPE_CHECKING
 
 import pandas as pd
 import numpy as np
@@ -24,20 +24,28 @@ from Bio.SeqUtils import GC123, molecular_weight # type: ignore # Use BioPython'
 from Bio.SeqUtils.ProtParam import ProteinAnalysis # type: ignore # For GRAVY, Aromaticity
 
 # Import prince for CA - handle optional dependency for typing
-try:
-    import prince
-    PrinceCA = prince.CA # Alias for typing if available
-except ImportError:
-    prince = None
-    PrinceCA = Any # Fallback type if prince not installed
+if TYPE_CHECKING:
+    import prince # Import only for type checking
+    PrinceCA = prince.CA # Actual type for type checker
+else:
+    PrinceCA = Any # Fallback type for runtime if prince not installed
+    try:
+        import prince # Try to import at runtime for actual use
+    except ImportError:
+        prince = None # Set to None if not found
 
 # Import scipy.stats - handle optional dependency for typing
-try:
-    from scipy import stats
-    ScipyStats = Any # Or be more specific if needed, e.g., type(stats)
-except ImportError:
-    stats = None
-    ScipyStats = Any
+if TYPE_CHECKING:
+    from scipy import stats as scipy_stats_module # Import only for type checking
+    ScipyStatsModule = Any # Could be more specific, e.g. type(scipy.stats)
+                           # but 'Any' is often sufficient for module-level objects
+                           # or define a Protocol if specific functions are consistently used.
+else:
+    ScipyStatsModule = Any # Fallback type for runtime
+    try:
+        from scipy import stats as scipy_stats_module
+    except ImportError:
+        scipy_stats_module = None # Set to None if not found
 
 from functools import partial
 
@@ -1003,8 +1011,7 @@ def compare_features_between_genes(
         Optional[pd.DataFrame]: DataFrame summarizing the test results (Feature,
                                 Test Statistic, P-value) or None if stats cannot be run.
     """
-    if stats is None:
-        logger.warning("scipy.stats module not found. Cannot perform statistical comparisons.")
+    if scipy_stats_module is None: # Check the runtime import        logger.warning("scipy.stats module not found. Cannot perform statistical comparisons.")
         return None
     if combined_per_sequence_df is None or combined_per_sequence_df.empty:
         logger.warning("Input data empty for compare_features_between_genes.")
@@ -1058,10 +1065,10 @@ def compare_features_between_genes(
         try:
             if method.lower() == 'kruskal':
                 test_name = "Kruskal-Wallis H"
-                statistic, p_value = stats.kruskal(*valid_groups_data)
+                statistic, p_value = scipy_stats_module.kruskal(*valid_groups_data)
             elif method.lower() == 'anova':
                 test_name = "One-way ANOVA F"
-                statistic, p_value = stats.f_oneway(*valid_groups_data)
+                statistic, p_value = scipy_stats_module.f_oneway(*valid_groups_data)
             else:
                 logger.warning(f"Unknown statistical method '{method}'. Skipping comparison for '{feature}'.")
                 continue
