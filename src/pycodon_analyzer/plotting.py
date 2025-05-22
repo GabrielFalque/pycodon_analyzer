@@ -23,6 +23,8 @@ try:
     from matplotlib.axes import Axes # For type hinting
     from matplotlib.figure import Figure # For type hinting
     from matplotlib.collections import PathCollection # For type hinting scatter plot object
+    from matplotlib.text import Text as MatplotlibText # For type hinting plt.Text
+
 except ImportError:
     # Critical dependency, log and exit might be too late if logger not set.
     print("CRITICAL ERROR: matplotlib is required but not installed. Please install it (`pip install matplotlib`).", file=sys.stderr)
@@ -58,16 +60,20 @@ else:
         SCIPY_AVAILABLE = False
         scipy_stats_module = None # Runtime check
 
-# Optional: Try importing prince for type hinting if needed
 if TYPE_CHECKING:
-    import prince # Import only for type checking
-    PrinceCA = prince.CA # Actual type for type checker
+    import prince
+    PrinceCA = prince.CA
+    from scipy import stats as scipy_stats_module # For type hints
 else:
-    PrinceCA = Any # Fallback type for runtime
+    PrinceCA = Any
     try:
         import prince
     except ImportError:
-        prince = None # Set to None if not found
+        prince = None
+    try:
+        from scipy import stats as scipy_stats_module
+    except ImportError:
+        scipy_stats_module = None
 
 try:
     from adjustText import adjust_text
@@ -78,6 +84,8 @@ except ImportError:
 # --- Configure logging for this module ---
 # Gets the logger instance configured in cli.py (or root logger if run standalone)
 logger = logging.getLogger(__name__)
+
+from . import utils as plot_utils # Assuming sanitize_filename is in utils
 
 # Set default seaborn theme (optional, place where it's guaranteed to run once)
 try:
@@ -95,18 +103,6 @@ AA_1_TO_3: Dict[str, str] = {
 }
 AA_3_TO_1: Dict[str, str] = {v: k for k, v in AA_1_TO_3.items()}
 AA_ORDER: List[str] = sorted(AA_1_TO_3.keys())
-
-# --- Utility function to sanitize filenames (with type hints) ---
-def sanitize_filename(name: Any) -> str:
-    """Removes or replaces characters problematic for filenames."""
-    if not isinstance(name, str): name = str(name) # Ensure string
-    name = re.sub(r'[\[\]()]', '', name) # Remove brackets and parentheses
-    name = re.sub(r'[\s/:]+', '_', name) # Replace whitespace, slashes, colons with underscore
-    name = re.sub(r'[^\w.\-]+', '', name) # Remove remaining non-alphanumeric (excluding underscore, hyphen, period)
-    name = name.strip('._-') # Remove leading/trailing problematic chars
-    # Prevent names like "." or ""
-    return name if name else "_invalid_name_"
-
 
 # === Aggregate Plots ===
 
@@ -347,7 +343,7 @@ def plot_gc_means_barplot(per_sequence_df: pd.DataFrame, output_dir: str, file_f
              logger.warning(f"Could not place GC means plot legend optimally: {legend_err}.")
              plt.tight_layout()
 
-        output_filename = os.path.join(output_dir, f"gc_means_barplot_by_{sanitize_filename(group_by)}.{file_format}")
+        output_filename = os.path.join(output_dir, f"gc_means_barplot_by_{plot_utils.sanitize_filename(group_by)}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"GC means barplot saved to: {output_filename}")
 
@@ -359,20 +355,16 @@ def plot_gc_means_barplot(per_sequence_df: pd.DataFrame, output_dir: str, file_f
         if fig is not None: plt.close(fig)
 
 
-def plot_neutrality(per_sequence_df: pd.DataFrame, 
-                    output_dir: str, 
-                    file_format: str = 'svg', 
-                    group_by: Optional[str] = 'Gene',
-                    palette: Optional[Dict[str, Any]] = None
+def plot_neutrality(per_sequence_df: pd.DataFrame,
+                    output_dir: str,
+                    file_format: str = 'svg',
+                    group_by_col: Optional[str] = None, # Renamed, can be 'Gene' or metadata col
+                    palette: Optional[Dict[str, Any]] = None, # Palette for group_by_col
+                    filename_suffix: str = "",
+                    plot_title_prefix: str = ""
                     ) -> None:
     """
-    Generates a Neutrality Plot (GC12 vs GC3). Optionally colors points by group.
-
-    Args:
-        per_sequence_df (pd.DataFrame): DataFrame with per-sequence metrics (must have GC12, GC3).
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format. Default 'svg'.
-        group_by (Optional[str]): Column name to group/hue by. Default None.
+    Generates a Neutrality Plot (GC12 vs GC3). Optionally colors points by group_by_col.
     """
     required_cols = ['GC12', 'GC3']
     if per_sequence_df is None or per_sequence_df.empty:
@@ -382,10 +374,9 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
     if missing_cols:
         logger.error(f"Missing required columns ({', '.join(missing_cols)}) for Neutrality plot.")
         return
-    if group_by and group_by not in per_sequence_df.columns:
-        logger.warning(f"Grouping column '{group_by}' not found for Neutrality plot. Plotting without grouping.")
-        group_by = None
-        palette=None
+    if group_by_col and group_by_col not in per_sequence_df.columns:
+        logger.warning(f"{plot_title_prefix}Grouping column '{group_by_col}' not found for Neutrality plot. Plotting without grouping.") #
+        group_by_col = None # Disable grouping
 
     fig: Optional[Figure] = None
     scatter_plot_object: Optional[PathCollection] = None
@@ -396,22 +387,25 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
         plot_df['GC12_num'] = pd.to_numeric(plot_df['GC12'], errors='coerce')
         plot_df_valid = plot_df.dropna(subset=['GC3_num', 'GC12_num'])
 
-        if len(plot_df_valid) < 2:
-            logger.warning("Not enough valid data points (>=2) for Neutrality Plot regression/correlation.")
-            # Proceed to plot scatter if points exist? Or return? Let's proceed with scatter.
-            if plot_df_valid.empty: return # Return if absolutely no points
+        if len(plot_df_valid) < 2: #
+            logger.warning(f"{plot_title_prefix}Not enough valid data points (>=2) for Neutrality Plot regression/correlation. Skipping.") #
+            if plot_df_valid.empty: return #
 
         # Determine grouping possibility
-        perform_grouping = group_by and not plot_df_valid[group_by].isnull().all() and plot_df_valid[group_by].nunique() > 1
-        hue_col = group_by if perform_grouping else None
-        group_title = group_by if perform_grouping else "Group"
+        hue_column_actual = group_by_col if group_by_col and not plot_df_valid[group_by_col].isnull().all() and plot_df_valid[group_by_col].nunique() > 0 else None #
+        legend_title = group_by_col if hue_column_actual else "Group"
 
         fig, ax = plt.subplots(figsize=(8, 8))
 
         # Scatter plot
         scatter_plot_object = sns.scatterplot(
-            data=plot_df_valid, x='GC3_num', y='GC12_num', hue=hue_col,
-            alpha=0.7, s=60, palette=palette, legend='full' if hue_col else False, ax=ax)
+            data=plot_df_valid, 
+            x='GC3_num', y='GC12_num', 
+            hue=hue_column_actual,
+            alpha=0.7, s=60, 
+            palette=palette, 
+            legend='full' if hue_column_actual else False, 
+            ax=ax) 
 
         # Overall regression line (only if enough points)
         slope, intercept, r_value, p_value, std_err = np.nan, np.nan, np.nan, np.nan, np.nan
@@ -431,82 +425,71 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
 
 
         # Plotting customizations
-        ax.set_title('Neutrality Plot (GC12 vs GC3)', fontsize=14)
-        ax.set_xlabel('GC3 Content (%)', fontsize=12)
-        ax.set_ylabel('GC12 Content (%)', fontsize=12)
-        ax.grid(True, linestyle=':', alpha=0.6)
-        if not np.isnan(slope):
-             ax.text(0.05, 0.95, f'Overall Slope={slope:.3f}', transform=ax.transAxes, va='top',
-                      bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7))
-
+        title = f'{plot_title_prefix}Neutrality Plot (GC12 vs GC3)'
+        if hue_column_actual:
+            title += f' (by {legend_title})'
+        ax.set_title(title, fontsize=14) 
+        ax.set_xlabel('GC3 Content (%)', fontsize=12) 
+        ax.set_ylabel('GC12 Content (%)', fontsize=12) 
+        ax.grid(True, linestyle=':', alpha=0.6) 
+        if not np.isnan(slope): 
+             ax.text(0.05, 0.95, f'Overall Slope={slope:.3f}', transform=ax.transAxes, va='top', 
+                      bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7)) 
+             
         # Adjust Axis Limits
-        min_gc3, max_gc3 = plot_df_valid['GC3_num'].min(), plot_df_valid['GC3_num'].max()
-        min_gc12, max_gc12 = plot_df_valid['GC12_num'].min(), plot_df_valid['GC12_num'].max()
-        x_pad = max((max_gc3 - min_gc3) * 0.05, 2)
-        y_pad = max((max_gc12 - min_gc12) * 0.05, 2)
-        x_lim = (max(0, min_gc3 - x_pad), min(100, max_gc3 + x_pad))
-        y_lim = (max(0, min_gc12 - y_pad), min(100, max_gc12 + y_pad))
-        ax.set_xlim(x_lim)
-        ax.set_ylim(y_lim)
-
-        # Add y=x line
-        diag_lims = [max(x_lim[0], y_lim[0]), min(x_lim[1], y_lim[1])]
-        ax.plot(diag_lims, diag_lims, 'gray', linestyle=':', alpha=0.7, lw=1, label='y=x')
+        min_gc3_val, max_gc3_val = plot_df_valid['GC3_num'].min(), plot_df_valid['GC3_num'].max() 
+        min_gc12_val, max_gc12_val = plot_df_valid['GC12_num'].min(), plot_df_valid['GC12_num'].max() 
+        x_padding = max((max_gc3_val - min_gc3_val) * 0.05, 2) 
+        y_padding = max((max_gc12_val - min_gc12_val) * 0.05, 2)
+        x_limits = (max(0, min_gc3_val - x_padding), min(100, max_gc3_val + x_padding))
+        y_limits = (max(0, min_gc12_val - y_padding), min(100, max_gc12_val + y_padding))
+        ax.set_xlim(x_limits)
+        ax.set_ylim(y_limits)
+        diag_limits = [max(x_limits[0], y_limits[0]), min(x_limits[1], y_limits[1])]
+        ax.plot(diag_limits, diag_limits, 'gray', linestyle=':', alpha=0.7, lw=1, label='y=x')
         ax.tick_params(axis='both', which='major', labelsize=10)
 
-        # --- Add Adjusted Gene Labels ---
-        if perform_grouping and hue_col:
-            texts: List[plt.Text] = []
-            group_data = plot_df_valid.groupby(hue_col)
-            for name, group in group_data:
-                if not group.empty:
-                    mean_x, mean_y = group['GC3_num'].mean(), group['GC12_num'].mean()
-                    group_color = palette.get(name, 'darkgrey') if palette else 'darkgrey' # Use darker color for labels
-                    # Create text object with higher alpha
-                    txt = ax.text(mean_x, mean_y, str(name),
-                                  fontsize=8,
-                                  alpha=0.9,
-                                  color=group_color, ha='center', va='center',
-                                  bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7)) # Optional faint background
+        # --- Add Adjusted Group Labels ---
+        if hue_column_actual and ADJUSTTEXT_AVAILABLE: 
+            texts: List[MatplotlibText] = [] 
+            group_data_iter = plot_df_valid.groupby(hue_column_actual) # group_data renamed to group_data_iter
+            for name, group_df in group_data_iter: 
+                if not group_df.empty: 
+                    mean_x, mean_y = group_df['GC3_num'].mean(), group_df['GC12_num'].mean()
+                    text_color_val = palette.get(name, 'darkgrey') if palette and isinstance(palette, dict) else 'darkgrey' # group_color renamed text_color_val
+                    txt = ax.text(mean_x, mean_y, str(name), fontsize=8, alpha=0.9, color=text_color_val,
+                                  ha='center', va='center',
+                                  bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
                     texts.append(txt)
-
-            if ADJUSTTEXT_AVAILABLE and texts:
-                logger.debug("Adjusting text labels using adjustText for Neutrality Plot...")
+            if texts:
                 try:
-                    adjust_text(
-                        texts,
-                        ax=ax,
-                        add_objects=[scatter_plot_object] if scatter_plot_object else [], # <-- Avoid points
-                        arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6), # <-- Arrows enabled
-                        force_points=(0.6, 0.8), # <-- INCREASED point repulsion force 
-                        force_text=(0.4, 0.6),   # <-- INCREASED text repulsion force 
-                        expand_points=(1.3, 1.3) # <-- INCREASED padding around points 
-                        # lim=500 # Optional: Increase iterations if needed
-                    )
+                    adjust_text(texts, ax=ax, add_objects=[scatter_plot_object] if scatter_plot_object else [],
+                                arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6),
+                                force_points=(0.6, 0.8), force_text=(0.4, 0.6), expand_points=(1.3, 1.3))
                 except Exception as adj_err:
-                    logger.warning(f"adjustText failed for Neutrality Plot: {adj_err}. Labels might overlap.")
-            elif not ADJUSTTEXT_AVAILABLE and texts:
-                 logger.info("adjustText not installed. Install for automatic label adjustment (`pip install adjusttext`). Labels placed at centroids, may overlap.")
+                    logger.warning(f"{plot_title_prefix}adjustText failed for Neutrality Plot labels: {adj_err}. Labels might overlap.")
+        elif hue_column_actual and not ADJUSTTEXT_AVAILABLE:
+             logger.info(f"{plot_title_prefix}adjustText not installed. Group labels on Neutrality Plot may overlap.")
         
         # Legend handling
-        handles, labels = ax.get_legend_handles_labels()
+        handles, plot_labels = ax.get_legend_handles_labels()
         if handles:
             try:
-                if perform_grouping:
-                    ax.legend(title=group_title, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
+                if hue_column_actual:
+                    ax.legend(title=legend_title, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
                     plt.tight_layout(rect=[0, 0, 0.85, 1])
                 else:
-                    ax.legend()
+                    ax.legend(loc='best') # Show legend for "y=x" and "Overall" if no hue
                     plt.tight_layout()
             except Exception as legend_err:
-                logger.warning(f"Could not place Neutrality plot legend optimally: {legend_err}.")
-                plt.tight_layout() # Fallback
+                logger.warning(f"{plot_title_prefix}Could not place Neutrality plot legend optimally: {legend_err}.")
+                plt.tight_layout()
         else:
              plt.tight_layout()
 
         # Saving
-        filename_suffix = f"_grouped_by_{sanitize_filename(group_by)}" if perform_grouping else ""
-        output_filename = os.path.join(output_dir, f"neutrality_plot{filename_suffix}.{file_format}")
+        safe_suffix = plot_utils.sanitize_filename(filename_suffix)
+        output_filename = os.path.join(output_dir, f"neutrality_plot{safe_suffix}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"Neutrality plot saved to: {output_filename}")
 
@@ -518,21 +501,26 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
         if fig is not None: plt.close(fig)
 
 
-def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame, 
-                    output_dir: str, 
-                    file_format: str = 'svg', 
-                    group_by: Optional[str] = None,
-                    palette: Optional[Dict[str, Any]] = None
-                    ) -> None:
+def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
+                    output_dir: str,
+                    file_format: str = 'svg',
+                    group_by_col: Optional[str] = None, # Renamed from group_by for clarity, can be 'Gene' or a metadata column
+                    palette: Optional[Dict[str, Any]] = None, # Palette for the group_by_col
+                    filename_suffix: str = "",
+                    plot_title_prefix: str = "" # Optional prefix for the plot title
+                   ) -> None:
     """
-    Generates ENC vs GC3 plot, including Wright's expected curve. Optionally colors points by group.
+    Generates ENC vs GC3 plot, including Wright's expected curve.
+    Optionally colors points by a specified group_by_col (e.g., 'Gene' or a metadata column).
 
     Args:
         per_sequence_df (pd.DataFrame): DataFrame with per-sequence metrics (must have ENC, GC3).
         output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format. Default 'svg'.
-        group_by (Optional[str]): Column name to group/hue by. Default None.
-        palette (Optional[Dict[str, Any]]): Palette for gene colors.
+        file_format (str): Plot file format.
+        group_by_col (Optional[str]): Column name to group/hue by. If None, no hue is applied.
+        palette (Optional[Dict[str, Any]]): Palette for group colors.
+        filename_suffix (str): Suffix to add to the output filename.
+        plot_title_prefix (str): Prefix for the plot title (e.g., "Gene X: ").
     """
     required_cols = ['ENC', 'GC3']
     if per_sequence_df is None or per_sequence_df.empty:
@@ -542,9 +530,9 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
     if missing_cols:
         logger.error(f"Missing required columns ({', '.join(missing_cols)}) for ENC vs GC3 plot.")
         return
-    if group_by and group_by not in per_sequence_df.columns:
-        logger.warning(f"Grouping column '{group_by}' not found for ENC vs GC3 plot. Plotting without grouping.")
-        group_by = None
+    if group_by_col and group_by_col not in per_sequence_df.columns:
+        logger.warning(f"{plot_title_prefix}Grouping column '{group_by_col}' not found for ENC vs GC3 plot. Plotting without grouping.")
+        group_by_col = None # Disable grouping if column not found
 
     fig: Optional[Figure] = None
     scatter_plot_object: Optional[PathCollection] = None
@@ -570,10 +558,9 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
         expected_enc[valid_denom] = 2 + s_values[valid_denom] + (29 / denominator[valid_denom])
         expected_enc = np.where(np.isfinite(expected_enc), expected_enc, np.nan)
 
-        # Determine grouping
-        perform_grouping = group_by and not plot_df_valid[group_by].isnull().all() and plot_df_valid[group_by].nunique() > 1
-        hue_col = group_by if perform_grouping else None
-        group_title = group_by if perform_grouping else "Group"
+        # Determine actual hue column and legend title
+        hue_column_actual = group_by_col if group_by_col and not plot_df_valid[group_by_col].isnull().all() else None
+        legend_title = group_by_col if hue_column_actual else "Group"
 
         fig, ax = plt.subplots(figsize=(9, 7))
 
@@ -582,11 +569,18 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
 
         # Plot scatter points
         scatter_plot_object =  sns.scatterplot(
-            data=plot_df_valid, x='GC3_frac', y='ENC_num', hue=hue_col,
-            alpha=0.7, s=60, palette=palette, legend='full' if hue_col else False, ax=ax)
-
+            data=plot_df_valid, x='GC3_frac', y='ENC_num',
+            hue=hue_column_actual, # Use the validated hue column
+            alpha=0.7, s=60,
+            palette=palette, # Use the passed palette
+            legend='full' if hue_column_actual else False, # Show legend only if hueing
+            ax=ax)
+        
         # Customizations
-        ax.set_title('ENC vs GC3 Plot', fontsize=14)
+        title = f'{plot_title_prefix}ENC vs GC3 Plot'
+        if hue_column_actual:
+            title += f' (by {legend_title})'
+        ax.set_title(title, fontsize=14)        
         ax.set_xlabel('GC3 Content (Fraction)', fontsize=12)
         ax.set_ylabel('Effective Number of Codons (ENC)', fontsize=12)
         ax.set_xlim(0, 1)
@@ -596,46 +590,48 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
         ax.grid(True, linestyle=':', alpha=0.6)
         ax.tick_params(axis='both', which='major', labelsize=10)
         
-        # --- Add Adjusted Gene Labels ---
-        if perform_grouping and hue_col:
-            texts: List[plt.Text] = []
-            group_data = plot_df_valid.groupby(hue_col)
-            for name, group in group_data:
-                if not group.empty:
-                    mean_x = group['GC3_frac'].mean()
-                    mean_y = group['ENC_num'].mean()
-                    group_color = palette.get(name, 'darkgrey') if palette else 'darkgrey'
-                    txt = ax.text(mean_x, mean_y, str(name),
-                                  fontsize=8,
-                                  alpha=0.9, # <-- Less transparent
-                                  color=group_color, ha='center', va='center',
+        # --- Add Adjusted Groups Labels ---
+        # Text labels for groups (e.g., mean point of each group)
+        if hue_column_actual and ADJUSTTEXT_AVAILABLE:
+            texts: List[MatplotlibText] = [] # Use the imported MatplotlibText
+            # Ensure palette is a dictionary if used for specific colors
+            # Or seaborn handles it if palette is a name like "husl"
+            group_data = plot_df_valid.groupby(hue_column_actual)
+            for name, group_df in group_data:
+                if not group_df.empty:
+                    mean_x = group_df['GC3_frac'].mean()
+                    mean_y = group_df['ENC_num'].mean()
+                    # Determine color for the text
+                    text_color = 'darkgrey' # Default
+                    if isinstance(palette, dict) and name in palette:
+                        text_color = palette[name]
+                    elif isinstance(palette, str): # Seaborn palette name
+                        # This is trickier, sns might have chosen the color.
+                        # For simplicity, use a default or try to get from scatter_plot_object if possible.
+                        pass # Stick to default for named palettes for now
+
+                    txt = ax.text(mean_x, mean_y, str(name), fontsize=8, alpha=0.9, color=text_color,
+                                  ha='center', va='center',
                                   bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
                     texts.append(txt)
-
-            if ADJUSTTEXT_AVAILABLE and texts:
-                logger.debug("Adjusting text labels using adjustText for ENC vs GC3 Plot...")
+            if texts:
                 try:
-                    adjust_text(
-                        texts,
-                        ax=ax,
-                        add_objects=[scatter_plot_object] if scatter_plot_object else [], # <-- Avoid points
-                        arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6), # <-- Arrows enabled
-                        force_points=(0.6, 0.8), # <-- INCREASED point repulsion force
-                        force_text=(0.4, 0.6),   # <-- INCREASED text repulsion force
-                        expand_points=(1.3, 1.3) # <-- INCREASED padding
-                    )
-                except Exception as adj_err: logger.warning(f"adjustText failed for ENC vs GC3 Plot: {adj_err}.")
-            elif not ADJUSTTEXT_AVAILABLE and texts: logger.info("adjustText not installed. Labels may overlap.")
+                    adjust_text(texts, ax=ax, add_objects=[scatter_plot_object] if scatter_plot_object else [],
+                                arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6),
+                                force_points=(0.6,0.8), force_text=(0.4,0.6), expand_points=(1.3,1.3))
+                except Exception as adj_err: logger.warning(f"adjustText failed for ENC vs GC3 labels: {adj_err}.")
+        elif hue_column_actual and not ADJUSTTEXT_AVAILABLE:
+            logger.info("adjustText not installed. Group labels on ENC vs GC3 plot may overlap.")
 
         # Legend handling
         handles, labels = ax.get_legend_handles_labels()
         if handles:
             try:
-                if perform_grouping:
-                    ax.legend(title=group_title, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
-                    plt.tight_layout(rect=[0, 0, 0.85, 1])
-                else:
-                    ax.legend() # Show legend for Wright's curve only
+                if hue_column_actual:
+                    ax.legend(title=legend_title, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
+                    plt.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust for external legend
+                else: # Only "Expected ENC" legend
+                    ax.legend(loc='best')
                     plt.tight_layout()
             except Exception as legend_err:
                  logger.warning(f"Could not place ENC vs GC3 plot legend optimally: {legend_err}.")
@@ -644,8 +640,8 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
             plt.tight_layout()
 
         # Saving
-        filename_suffix = f"_grouped_by_{sanitize_filename(group_by)}" if perform_grouping else ""
-        output_filename = os.path.join(output_dir, f"enc_vs_gc3_plot{filename_suffix}.{file_format}")
+        safe_suffix = plot_utils.sanitize_filename(filename_suffix)
+        output_filename = os.path.join(output_dir, f"enc_vs_gc3_plot{safe_suffix}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"ENC vs GC3 plot saved to: {output_filename}")
 
@@ -655,6 +651,112 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
         logger.exception(f"Error generating ENC vs GC3 plot: {e}")
     finally:
         if fig is not None: plt.close(fig)
+
+# --- New function for per-gene dinucleotide abundance by metadata ---
+def plot_per_gene_dinucleotide_abundance_by_metadata(
+    per_sequence_oe_ratios_df: pd.DataFrame, # Cols: Dinucleotide, RelativeAbundance, and metadata_hue_col
+    metadata_hue_col: str,
+    output_dir: str,
+    file_format: str,
+    palette: Optional[Dict[str, Any]], # Palette for metadata categories
+    gene_name: str, # For title and filename
+    filename_suffix_extra: str = "" # e.g., "_by_lineage"
+) -> None:
+    """
+    Plots per-gene dinucleotide O/E ratios, with lines/points aggregated and colored
+    by a specified metadata column.
+
+    Args:
+        per_sequence_oe_ratios_df (pd.DataFrame): DataFrame containing per-sequence
+            O/E ratios. Must have 'Dinucleotide', 'RelativeAbundance', and the
+            `metadata_hue_col` columns.
+        metadata_hue_col (str): The name of the column in `per_sequence_oe_ratios_df`
+                                to use for hueing (coloring lines/points).
+        output_dir (str): Directory to save the plot.
+        file_format (str): Plot file format.
+        palette (Optional[Dict[str, Any]]): Color palette for the metadata categories.
+        gene_name (str): Name of the gene for the plot title and filename.
+        filename_suffix_extra (str): Additional suffix for the filename.
+    """
+    logger.debug(f"Plotting dinucleotide O/E for gene '{gene_name}', hue by '{metadata_hue_col}'")
+    fig: Optional[Figure] = None
+    
+    required_cols = ['Dinucleotide', 'RelativeAbundance', metadata_hue_col]
+    if per_sequence_oe_ratios_df.empty or not all(col in per_sequence_oe_ratios_df.columns for col in required_cols):
+        logger.warning(f"Insufficient data or missing columns for per-gene dinucleotide plot for '{gene_name}'. "
+                       f"Required: {required_cols}. Has: {per_sequence_oe_ratios_df.columns.tolist()}. Skipping.")
+        return
+
+    try:
+        plot_data = per_sequence_oe_ratios_df.copy()
+        plot_data['RelativeAbundance'] = pd.to_numeric(plot_data['RelativeAbundance'], errors='coerce')
+        plot_data.dropna(subset=['RelativeAbundance', 'Dinucleotide', metadata_hue_col], inplace=True)
+
+        if plot_data.empty:
+            logger.warning(f"No valid data remaining for per-gene dinucleotide plot for '{gene_name}' after filtering NaNs.")
+            return
+
+        # Ensure consistent order for dinucleotides
+        dinucl_order = sorted(plot_data['Dinucleotide'].unique())
+        
+        # Sort metadata categories if possible (e.g., alphanumeric, or by count if desired)
+        # For now, rely on seaborn's default or order from palette if it's a list of keys.
+        hue_order = sorted(plot_data[metadata_hue_col].unique())
+
+
+        fig_width = max(10, len(dinucl_order) * 0.65)
+        fig, ax = plt.subplots(figsize=(fig_width, 6))
+
+        # Use lineplot to show mean trend per metadata category
+        # Standard error bands can be added by seaborn if desired (ci='sd' or ci=95)
+        sns.lineplot(
+            data=plot_data,
+            x='Dinucleotide',
+            y='RelativeAbundance',
+            hue=metadata_hue_col,
+            hue_order=hue_order,
+            palette=palette, # Use the provided palette for metadata categories
+            marker='o', # Add markers to lines
+            markersize=5,
+            errorbar=None, # Disable error bands for cleaner look, or use 'sd'
+            ax=ax,
+            legend='full'
+        )
+
+        ax.axhline(1.0, color='grey', linestyle='--', linewidth=1.2, label='Expected (O/E = 1.0)')
+        
+        title = f"Dinucleotide O/E Ratios for Gene: {gene_name}\nGrouped by {metadata_hue_col}"
+        ax.set_title(title, fontsize=14)
+        ax.set_xlabel('Dinucleotide', fontsize=12)
+        ax.set_ylabel('Mean Relative Abundance (O/E)', fontsize=12) # Assuming lineplot shows mean
+        ax.tick_params(axis='x', rotation=45, labelsize=9)
+        ax.tick_params(axis='y', labelsize=10)
+        ax.grid(axis='y', linestyle=':', alpha=0.7)
+
+        # Legend handling
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            try:
+                # Put legend outside plot
+                ax.legend(title=metadata_hue_col, bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+                plt.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust for external legend
+            except Exception as legend_err:
+                logger.warning(f"Could not place dinucleotide plot legend optimally for {gene_name}: {legend_err}.")
+                plt.tight_layout()
+        else:
+            plt.tight_layout()
+
+        safe_gene_name = plot_utils.sanitize_filename(gene_name)
+        safe_suffix_extra = plot_utils.sanitize_filename(filename_suffix_extra)
+        output_filename = os.path.join(output_dir, f"dinucl_abundance_{safe_gene_name}{safe_suffix_extra}.{file_format}")
+        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
+        logger.info(f"Per-gene dinucleotide abundance plot saved to: {output_filename}")
+
+    except Exception as e:
+        logger.exception(f"Error generating per-gene dinucleotide abundance plot for '{gene_name}': {e}")
+    finally:
+        if fig is not None:
+            plt.close(fig)
 
 
 def plot_ca_contribution(ca_results: PrinceCA, dimension: int, n_top: int, output_dir: str, file_format: str) -> None: # type: ignore
@@ -843,38 +945,26 @@ def plot_ca_variance(ca_results: PrinceCA, n_dims: int, output_dir: str, file_fo
 
 
 def plot_ca(
-    ca_results: PrinceCA, # type: ignore
+    ca_results: PrinceCA,
     ca_input_df: pd.DataFrame,
     output_dir: str,
     file_format: str = 'svg',
     comp_x: int = 0,
     comp_y: int = 1,
-    groups: Optional[pd.Series] = None,
-    palette: Optional[Dict[str, Any]] = None,
-    filename_suffix: str = ""
+    groups: Optional[pd.Series] = None, # This will be the metadata series for hueing
+    palette: Optional[Dict[str, Any]] = None, # Palette for the groups
+    filename_suffix: str = "",
+    plot_title_prefix: str = ""
 ) -> None:
     """
-    Generates Correspondence Analysis biplot using the prince library results.
-    Optionally colors row points based on the 'groups' Series.
-
-    Args:
-        ca_results (PrinceCA): Fitted CA object from prince.
-        ca_input_df (pd.DataFrame): The input data used for CA fitting (must match index of groups).
-        output_dir (str): Directory to save plot.
-        file_format (str): Plot file format. Default 'svg'.
-        comp_x (int): Index of the CA component for the x-axis. Default 0.
-        comp_y (int): Index of the CA component for the y-axis. Default 1.
-        groups (Optional[pd.Series]): Series mapping ca_input_df index to group labels
-                                      (e.g., gene names) for coloring row points.
-                                      Index must match ca_input_df.index. Default None.
-        filename_suffix (str): Suffix to add to the output filename. Default "".
-        palette (Optional[Dict[str, Any]]): Palette for gene colors.
+    Generates Correspondence Analysis biplot.
+    Optionally colors row points based on the 'groups' Series (e.g., metadata categories).
     """
-    if prince is None or ca_results is None or not isinstance(ca_results, prince.CA): # Runtime check against imported module
-        logger.warning("No valid CA results (or prince library missing) available for contribution plot.")
+    if prince is None or ca_results is None or not isinstance(ca_results, prince.CA): 
+        logger.warning(f"{plot_title_prefix}No valid CA results (or prince library missing) to plot. Skipping.") 
         return
-    if ca_input_df is None or ca_input_df.empty:
-         logger.error("CA input DataFrame needed for plotting coordinates is missing or empty.")
+    if ca_input_df is None or ca_input_df.empty: 
+         logger.error(f"{plot_title_prefix}CA input DataFrame for coordinates is missing or empty. Skipping.") 
          return
 
     fig: Optional[Figure] = None
@@ -882,163 +972,178 @@ def plot_ca(
 
     try:
         # Get coordinates using the input df used for fitting
+        row_coords_raw: Optional[pd.DataFrame] = None
+        col_coords_raw: Optional[pd.DataFrame] = None
         try:
-             row_coords_raw = ca_results.row_coordinates(ca_input_df)
-             col_coords_raw = ca_results.column_coordinates(ca_input_df)
-        except Exception as coord_err:
-             logger.error(f"Error getting coordinates from CA object: {coord_err}.")
+             row_coords_raw = ca_results.row_coordinates(ca_input_df) 
+             col_coords_raw = ca_results.column_coordinates(ca_input_df) 
+        except Exception as coord_err: #
+             logger.error(f"{plot_title_prefix}Error getting coordinates from CA object: {coord_err}. Skipping.") 
              return
 
         # Filter out non-finite coordinates
-        coords_to_plot: List[int] = [comp_x, comp_y]
-        try:
-            row_coords = row_coords_raw.replace([np.inf, -np.inf], np.nan).dropna(subset=coords_to_plot)
-            col_coords = col_coords_raw.replace([np.inf, -np.inf], np.nan).dropna(subset=coords_to_plot)
-        except KeyError:
-             logger.error(f"Requested CA components ({comp_x}, {comp_y}) not found in coordinates DataFrame.")
-             return
+        coords_to_plot: List[int] = [comp_x, comp_y] 
+        row_coords: Optional[pd.DataFrame] = None
+        col_coords: Optional[pd.DataFrame] = None
 
-        if row_coords.empty and col_coords.empty:
-             logger.warning("No finite coordinates found for CA plot after filtering.")
+        if row_coords_raw is not None:
+            try:
+                row_coords = row_coords_raw.replace([np.inf, -np.inf], np.nan).dropna(subset=coords_to_plot) 
+            except KeyError: 
+                 logger.error(f"{plot_title_prefix}Requested CA components for rows ({comp_x}, {comp_y}) not found. Skipping.") 
+                 row_coords = pd.DataFrame() # Empty
+        if col_coords_raw is not None:
+            try:
+                col_coords = col_coords_raw.replace([np.inf, -np.inf], np.nan).dropna(subset=coords_to_plot) 
+            except KeyError: 
+                 logger.warning(f"{plot_title_prefix}Requested CA components for columns ({comp_x}, {comp_y}) not found for plot.") 
+                 col_coords = pd.DataFrame() # Empty
+
+        if (row_coords is None or row_coords.empty) and (col_coords is None or col_coords.empty): 
+             logger.warning(f"{plot_title_prefix}No finite CA coordinates found after filtering. Skipping CA plot.") 
              return
 
         # Get variance explained for axis labels
-        x_label, y_label = f'Component {comp_x+1}', f'Component {comp_y+1}' # Defaults
+        x_label_val, y_label_val = f'Component {comp_x+1}', f'Component {comp_y+1}'
         try:
-            if hasattr(ca_results, 'eigenvalues_summary'):
-                variance_explained = ca_results.eigenvalues_summary
-                variance_col = '% of variance'
-                if variance_col not in variance_explained.columns:
-                     alt_names = ['% variance', 'explained_variance_ratio'] # Try alternatives
-                     for name in alt_names:
-                          if name in variance_explained.columns: variance_col = name; break
-                if variance_col in variance_explained.columns and comp_x < len(variance_explained) and comp_y < len(variance_explained):
-                    x_var_raw = variance_explained.loc[comp_x, variance_col]
-                    y_var_raw = variance_explained.loc[comp_y, variance_col]
-                    # Clean potential '%' signs and convert
-                    x_var = float(str(x_var_raw).replace('%','').strip())
-                    y_var = float(str(y_var_raw).replace('%','').strip())
-                    x_label = f'Component {comp_x+1} ({x_var:.2f}%)'
-                    y_label = f'Component {comp_y+1} ({y_var:.2f}%)'
+            if hasattr(ca_results, 'eigenvalues_summary'): 
+                variance_explained = ca_results.eigenvalues_summary 
+                variance_col_name = '% of variance'
+                if variance_col_name not in variance_explained.columns: 
+                     alt_names_list = ['% variance', 'explained_variance_ratio']
+                     for name_iter in alt_names_list:
+                          if name_iter in variance_explained.columns: variance_col_name = name_iter; break
+                if variance_col_name in variance_explained.columns and comp_x < len(variance_explained) and comp_y < len(variance_explained):
+                    x_var_str = str(variance_explained.loc[comp_x, variance_col_name]).replace('%','').strip()
+                    y_var_str = str(variance_explained.loc[comp_y, variance_col_name]).replace('%','').strip()
+                    x_variance = float(x_var_str)
+                    y_variance = float(y_var_str)
+                    x_label_val = f'Component {comp_x+1} ({x_variance:.2f}%)'
+                    y_label_val = f'Component {comp_y+1} ({y_variance:.2f}%)'
                 else:
                      logger.warning("Could not retrieve or format variance explained for CA plot labels.")
             else:
                  logger.warning("'eigenvalues_summary' not found in CA results. Using default axis labels.")
         except (AttributeError, KeyError, ValueError, TypeError) as fmt_err:
-             logger.warning(f"Could not format variance explained for CA plot labels: {fmt_err}. Using default labels.")
+             logger.warning(f"{plot_title_prefix}Could not format variance explained for CA plot labels: {fmt_err}. Using default labels.")
 
+        fig, ax = plt.subplots(figsize=(10, 10))
 
-        fig, ax = plt.subplots(figsize=(12, 12))
+        # Hueing logic based on 'groups' Series
+        perform_hueing = False
+        legend_title = "Group"
+        groups_for_hue: Optional[pd.Series] = None
 
-        # Check groups validity AFTER filtering row_coords
-        perform_grouping = False
-        hue_group_name = 'Group'
-        groups_filtered = None
-
-        if groups is not None and isinstance(groups, pd.Series) and not row_coords.empty:
+        if groups is not None and isinstance(groups, pd.Series) and row_coords is not None and not row_coords.empty:
             try:
-                # Align groups series with the filtered row_coords index
-                groups_filtered = groups.reindex(row_coords.index).dropna()
-                if not groups_filtered.empty and groups_filtered.nunique() > 1:
-                    perform_grouping = True
-                    hue_group_name = groups_filtered.name if groups_filtered.name else 'Group'
-                elif not groups_filtered.empty:
-                     logger.info("Only one unique group found for CA plot points after filtering. Coloring will be uniform.")
+                # Align groups Series with the filtered row_coords index
+                groups_aligned = groups.reindex(row_coords.index).dropna()
+                if not groups_aligned.empty and groups_aligned.nunique() > 0: # Ensure some groups exist after aligning and dropping NA
+                    perform_hueing = True
+                    legend_title = groups_aligned.name if groups_aligned.name else "Category"
+                    groups_for_hue = groups_aligned
+                elif not groups_aligned.empty:
+                     logger.info(f"{plot_title_prefix}Only one unique group found for CA plot points after filtering. Coloring will be uniform for rows.")
             except Exception as group_err:
-                logger.warning(f"Error processing groups for CA plot: {group_err}. Plotting without grouping.")
-                perform_grouping = False
+                logger.warning(f"{plot_title_prefix}Error processing groups for CA plot: {group_err}. Plotting rows without hue.")
+                perform_hueing = False
 
         # Plot row points (sequences/genes)
-        if not row_coords.empty:
-            if perform_grouping and groups_filtered is not None:
-                plot_data = row_coords.copy()
-                # Ensure group column name doesn't clash
-                group_col_temp = '_group_for_plotting_'
-                plot_data[group_col_temp] = groups_filtered
-                row_scatter_object = sns.scatterplot(data=plot_data, x=comp_x, y=comp_y, hue=group_col_temp,
-                                ax=ax, s=50, alpha=0.7, palette=palette, legend='full')
-                # Set legend title correctly
-                try: ax.legend(title=hue_group_name, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
-                except: pass # Ignore legend errors sometimes caused by tight_layout interaction
+        if row_coords is not None and not row_coords.empty:
+            # Use a temporary DataFrame for plotting with hue to avoid modifying row_coords
+            plot_data_rows = row_coords.copy()
+            if perform_hueing and groups_for_hue is not None:
+                # Ensure hue column name is unique and does not clash
+                hue_col_name = legend_title if legend_title not in plot_data_rows.columns else f"{legend_title}_hue"
+                plot_data_rows[hue_col_name] = groups_for_hue
+                row_scatter_object = sns.scatterplot(
+                    data=plot_data_rows, x=comp_x, y=comp_y, hue=hue_col_name,
+                    ax=ax, s=60, alpha=0.7, palette=palette, legend='full')
             else:
-                # Fallback if grouping is not performed or failed
-                row_scatter_object = ax.scatter(row_coords[comp_x], row_coords[comp_y], s=50, alpha=0.7, label='Rows (Sequences/Genes)', color='blue')
+                row_scatter_object = ax.scatter(row_coords[comp_x], row_coords[comp_y], s=60, alpha=0.7, label='Rows (Sequences)', color='blue')
 
-        # Plot column points (codons) - Optional: Can make plots very crowded
-        show_col_points = False # Set to True to display codon points
-        if show_col_points and not col_coords.empty:
-            ax.scatter(col_coords[comp_x], col_coords[comp_y], marker='^', s=60, alpha=0.8, c='red', label='Cols (Codons)')
-            # Add labels for codons (can be very crowded)
-            show_col_labels = True
-            if show_col_labels:
-                texts_col = []
-                for i, txt in enumerate(col_coords.index):
-                     texts_col.append(ax.text(col_coords.iloc[i, comp_x], col_coords.iloc[i, comp_y], txt, fontsize=7, color='darkred'))
-                # Optional: adjust text overlap
-                # try: from adjustText import adjust_text; adjust_text(texts_col, ax=ax, arrowprops=dict(arrowstyle='-', color='gray', lw=0.5))
-                # except ImportError: pass
-        
-        # --- Add Adjusted Gene Labels (for row points) ---
-        if perform_grouping and groups_filtered is not None:
-            texts: List[plt.Text] = []
-            temp_label_df = row_coords.copy()
-            temp_label_df['group_label'] = groups_filtered
-            group_data = temp_label_df.groupby('group_label')
+        # Plot column points (codons) - less emphasized for clarity
+        """
+        if col_coords is not None and not col_coords.empty:
+            ax.scatter(col_coords[comp_x], col_coords[comp_y], marker='x', s=40, alpha=0.6, c='dimgray', label='Cols (Codons)')
+            if len(col_coords) < 30: # Add labels for codons only if not too many, to avoid clutter
+                texts_col_labels: List[MatplotlibText] = []
+                for idx, txt_val in enumerate(col_coords.index):
+                     texts_col_labels.append(ax.text(col_coords.iloc[idx, comp_x], col_coords.iloc[idx, comp_y], txt_val, fontsize=7, color='darkred', alpha=0.8))
+                if ADJUSTTEXT_AVAILABLE and texts_col_labels:
+                    try: adjust_text(texts_col_labels, ax=ax, arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.5))
+                    except Exception as adj_err_col: logger.warning(f"adjustText for CA column labels failed: {adj_err_col}")
+        """
 
-            for name, group in group_data:
-                if not group.empty:
-                    mean_x, mean_y = group[comp_x].mean(), group[comp_y].mean()
-                    group_color = palette.get(name, 'darkgrey') if palette else 'darkgrey'
-                    txt = ax.text(mean_x, mean_y, str(name),
-                                  fontsize=8,
-                                  alpha=0.9, # <-- Less transparent
-                                  color=group_color, ha='center', va='center',
-                                  bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
-                    texts.append(txt)
-
-            if ADJUSTTEXT_AVAILABLE and texts:
-                logger.debug("Adjusting text labels using adjustText for CA Plot...")
+        # Add Adjusted Row Labels (if hueing by groups)
+        if perform_hueing and groups_for_hue is not None and row_coords is not None and ADJUSTTEXT_AVAILABLE:
+            texts_row_labels: List[MatplotlibText] = []
+            # Use plot_data_rows which has the hue column
+            temp_label_df_ca = plot_data_rows.copy()
+            # If plot_data_rows does not have the hue_col_name (e.g. legend_title), it needs to be added from groups_for_hue
+            # This should be correct now as plot_data_rows has the hue column
+            
+            group_data_ca_iter = temp_label_df_ca.groupby(legend_title)
+            for name_val, group_df_ca in group_data_ca_iter:
+                if not group_df_ca.empty:
+                    mean_x_ca, mean_y_ca = group_df_ca[comp_x].mean(), group_df_ca[comp_y].mean()
+                    text_color_ca = palette.get(name_val, 'darkgrey') if palette and isinstance(palette, dict) else 'darkgrey'
+                    txt_obj = ax.text(mean_x_ca, mean_y_ca, str(name_val), fontsize=8, alpha=0.9, color=text_color_ca,
+                                  ha='center', va='center', bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
+                    texts_row_labels.append(txt_obj)
+            if texts_row_labels:
                 try:
-                    adjust_text(
-                        texts,
-                        ax=ax,
-                        add_objects=[row_scatter_object] if row_scatter_object else [], # <-- Avoid row points
-                        arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6), # <-- Arrows enabled
-                        force_points=(0.6, 0.8), # <-- INCREASED point repulsion force
-                        force_text=(0.5, 0.7)    # <-- INCREASED text repulsion force
-                    )
-                except Exception as adj_err: logger.warning(f"adjustText failed for CA Plot: {adj_err}.")
-            elif not ADJUSTTEXT_AVAILABLE and texts: logger.info("adjustText not installed. Labels may overlap.")
+                    adjust_text(texts_row_labels, ax=ax, 
+                                add_objects=[row_scatter_object] if row_scatter_object else [],
+                                arrowprops=dict(arrowstyle='-', color='gray', 
+                                                lw=0.5, alpha=0.6),
+                                force_points=(0.7, 0.9), force_text=(0.6, 0.8), 
+                                expand_points=(1.3,1.3))
+                except Exception as adj_err_row: 
+                    logger.warning(f"{plot_title_prefix}adjustText for CA row group labels failed: {adj_err_row}.")
+        elif perform_hueing and not ADJUSTTEXT_AVAILABLE:
+            logger.info(f"{plot_title_prefix}adjustText not installed. CA row group labels may overlap.")
 
         # Customizations
-        ax.set_title(f'Correspondence Analysis Biplot (Components {comp_x+1} & {comp_y+1})', fontsize=14)
-        ax.set_xlabel(x_label, fontsize=12)
-        ax.set_ylabel(y_label, fontsize=12)
-        ax.axhline(0, color='grey', lw=0.5, linestyle='--')
-        ax.axvline(0, color='grey', lw=0.5, linestyle='--')
+        plot_main_title = f'{plot_title_prefix}Correspondence Analysis (Components {comp_x+1} & {comp_y+1})'
+        if perform_hueing:
+            plot_main_title += f' by {legend_title}'
+        ax.set_title(plot_main_title, fontsize=14)
+        ax.set_xlabel(x_label_val, fontsize=12)
+        ax.set_ylabel(y_label_val, fontsize=12)
+        ax.axhline(0, color='grey', lw=0.7, linestyle='--')
+        ax.axvline(0, color='grey', lw=0.7, linestyle='--')
         ax.grid(True, linestyle=':', alpha=0.5)
         ax.tick_params(axis='both', which='major', labelsize=10)
 
         # Adjust layout
-        try:
-            if perform_grouping: plt.tight_layout(rect=[0, 0, 0.85, 1])
-            else: plt.tight_layout()
-        except Exception as layout_err:
-            logger.warning(f"Error during tight_layout for CA plot: {layout_err}")
-
+        current_handles, current_labels = ax.get_legend_handles_labels() # Get handles and labels after all plotting
+        if current_handles:
+            try:
+                # If hueing by groups, the legend title is already set by seaborn if legend='full'
+                # If not hueing by groups, or if we want to customize, we can do it here.
+                if perform_hueing: # The legend generated by seaborn scatterplot with hue is usually good
+                    ax.legend(title=legend_title, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
+                    plt.tight_layout(rect=[0, 0, 0.85, 1])
+                else: # Legend for 'Rows' and 'Cols' if no hueing
+                    ax.legend(loc='best')
+                    plt.tight_layout()
+            except Exception as legend_err:
+                logger.warning(f"{plot_title_prefix}Could not place CA plot legend optimally: {legend_err}")
+                plt.tight_layout()
+        else:
+            plt.tight_layout() 
 
         # Saving
-        safe_suffix = sanitize_filename(filename_suffix)
-        if safe_suffix and not safe_suffix.startswith('_'): safe_suffix = "_" + safe_suffix
+        safe_suffix = plot_utils.sanitize_filename(filename_suffix)
         output_filename = os.path.join(output_dir, f"ca_biplot_comp{comp_x+1}v{comp_y+1}{safe_suffix}.{file_format}")
-
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"CA biplot saved to: {output_filename}")
 
     except (ValueError, TypeError, KeyError, AttributeError) as data_err:
-         logger.error(f"Data error during CA plot generation: {data_err}")
+         logger.error(f"{plot_title_prefix}Data error during CA plot generation: {data_err}")
     except Exception as e:
-        logger.exception(f"Error generating CA plot: {e}")
+        logger.exception(f"{plot_title_prefix}Error generating CA plot: {e}")
     finally:
         if fig is not None: plt.close(fig)
 
@@ -1370,7 +1475,7 @@ def plot_rscu_boxplot_per_gene(
         plt.tight_layout(rect=[0, 0.03, 1, 0.97]) # Adjust layout slightly
 
         # Save the plot
-        safe_gene_name = sanitize_filename(gene_name)
+        safe_gene_name = plot_utils.sanitize_filename(gene_name)
         output_filename = os.path.join(output_dir, f"RSCU_boxplot_{safe_gene_name}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"RSCU boxplot saved to: {output_filename}")
@@ -1691,7 +1796,7 @@ def plot_ca_axes_feature_correlation(
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-        safe_method_name = sanitize_filename(method_name) # Assuming sanitize_filename is available
+        safe_method_name = plot_utils.sanitize_filename(method_name) # Assuming sanitize_filename is available
         output_filename = os.path.join(output_dir, f"ca_axes_feature_corr_{safe_method_name}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"CA Axes vs Features correlation heatmap saved to: {output_filename}")

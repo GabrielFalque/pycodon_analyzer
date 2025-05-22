@@ -14,6 +14,7 @@ import logging # <-- Import logging
 import math
 import csv
 from typing import List, Dict, Optional, Tuple, Set, Union, Any
+import re
 
 # Third-party imports with checks
 try:
@@ -86,6 +87,17 @@ STANDARD_START_CODONS: Set[str] = {'ATG'}
 STANDARD_STOP_CODONS: Set[str] = {'TAA', 'TAG', 'TGA'}
 
 # --- Functions ---
+
+# --- Utility function to sanitize filenames (with type hints) ---
+def sanitize_filename(name: Any) -> str:
+    """Removes or replaces characters problematic for filenames."""
+    if not isinstance(name, str): name = str(name) # Ensure string
+    name = re.sub(r'[\[\]()]', '', name) # Remove brackets and parentheses
+    name = re.sub(r'[\s/:]+', '_', name) # Replace whitespace, slashes, colons with underscore
+    name = re.sub(r'[^\w.\-]+', '', name) # Remove remaining non-alphanumeric (excluding underscore, hyphen, period)
+    name = name.strip('._-') # Remove leading/trailing problematic chars
+    # Prevent names like "." or ""
+    return name if name else "_invalid_name_"
 
 def get_genetic_code(code_id: int = 1) -> Dict[str, str]:
     """

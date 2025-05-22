@@ -15,7 +15,7 @@ import logging # <-- Import logging
 import math # For log, exp in CAI, etc.
 from collections import Counter
 from typing import List, Dict, Optional, Set, Tuple, Any, Union, TYPE_CHECKING
-
+import warnings
 import pandas as pd
 import numpy as np
 from Bio.SeqRecord import SeqRecord
@@ -197,6 +197,87 @@ def calculate_dinucleotide_frequencies(sequences: List[SeqRecord]) -> Tuple[Dict
              freqs[dinucl_key] = counts.get(dinucl_key, 0) / total_dinucl if total_dinucl > 0 else 0.0
 
     return freqs, total_dinucl
+
+# --- Per-sequence frequency functions ---
+def calculate_per_sequence_nucleotide_frequencies(
+    sequences: List[SeqRecord]
+) -> Dict[str, Dict[str, float]]:
+    """
+    Calculates A,T,C,G frequencies for each individual sequence.
+
+    Args:
+        sequences (List[SeqRecord]): List of Biopython SeqRecord objects.
+
+    Returns:
+        Dict[str, Dict[str, float]]: A dictionary where keys are sequence IDs
+                                     and values are dicts of nucleotide frequencies
+                                     (e.g., {'seqA': {'A': 0.25, ...}, ...}).
+    """
+    per_seq_freqs: Dict[str, Dict[str, float]] = {}
+    if not sequences:
+        logger.debug("calculate_per_sequence_nucleotide_frequencies: Received empty sequence list.")
+        return per_seq_freqs
+
+    logger.debug(f"Calculating per-sequence nucleotide frequencies for {len(sequences)} sequences...")
+    for record in sequences:
+        if not hasattr(record, 'id') or not record.id:
+            logger.warning("Skipping record with missing ID in per-sequence nucleotide frequency calculation.")
+            continue
+        try:
+            # Use the aggregate function on a list containing just this one record
+            freqs, total_bases = calculate_nucleotide_frequencies([record])
+            if total_bases > 0:
+                per_seq_freqs[record.id] = freqs
+            else:
+                # If a sequence has no valid bases (e.g., all 'N' or empty after cleaning)
+                logger.debug(f"Sequence '{record.id}' has 0 valid bases; nucleotide frequencies will be all 0.")
+                per_seq_freqs[record.id] = {base: 0.0 for base in 'ATCG'}
+        except Exception as e:
+            logger.error(f"Error calculating nucleotide frequencies for sequence '{record.id}': {e}")
+            # Optionally, add an entry with NaNs or skip
+            per_seq_freqs[record.id] = {base: np.nan for base in 'ATCG'}
+    logger.debug("Finished calculating per-sequence nucleotide frequencies.")
+    return per_seq_freqs
+
+def calculate_per_sequence_dinucleotide_frequencies(
+    sequences: List[SeqRecord]
+) -> Dict[str, Dict[str, float]]:
+    """
+    Calculates dinucleotide frequencies for each individual sequence.
+
+    Args:
+        sequences (List[SeqRecord]): List of Biopython SeqRecord objects.
+
+    Returns:
+        Dict[str, Dict[str, float]]: A dictionary where keys are sequence IDs
+                                     and values are dicts of dinucleotide frequencies
+                                     (e.g., {'seqA': {'AA': 0.0625, ...}, ...}).
+    """
+    per_seq_freqs: Dict[str, Dict[str, float]] = {}
+    if not sequences:
+        logger.debug("calculate_per_sequence_dinucleotide_frequencies: Received empty sequence list.")
+        return per_seq_freqs
+        
+    bases = 'ACGT'
+    all_dinucl_keys = [d1 + d2 for d1 in bases for d2 in bases]
+
+    logger.debug(f"Calculating per-sequence dinucleotide frequencies for {len(sequences)} sequences...")
+    for record in sequences:
+        if not hasattr(record, 'id') or not record.id:
+            logger.warning("Skipping record with missing ID in per-sequence dinucleotide frequency calculation.")
+            continue
+        try:
+            freqs, total_dinucl = calculate_dinucleotide_frequencies([record])
+            if total_dinucl > 0:
+                per_seq_freqs[record.id] = freqs
+            else:
+                logger.debug(f"Sequence '{record.id}' has 0 valid dinucleotides; frequencies will be all 0.")
+                per_seq_freqs[record.id] = {key: 0.0 for key in all_dinucl_keys}
+        except Exception as e:
+            logger.error(f"Error calculating dinucleotide frequencies for sequence '{record.id}': {e}")
+            per_seq_freqs[record.id] = {key: np.nan for key in all_dinucl_keys}
+    logger.debug("Finished calculating per-sequence dinucleotide frequencies.")
+    return per_seq_freqs
 
 
 # === Codon and Sequence Property Calculations ===
@@ -840,21 +921,23 @@ def analyze_single_sequence(
 
 # --- Main Analysis Function (SEQUENTIAL per-sequence analysis) ---
 # Define return type alias
-AnalysisResultType = Tuple[
+FullAnalysisResultType = Tuple[
     pd.DataFrame,               # agg_usage_df
     pd.DataFrame,               # per_sequence_df
-    Dict[str, float],           # overall_nucl_freqs
-    Dict[str, float],           # overall_dinucl_freqs
-    None,                       # Placeholder
+    Dict[str, float],           # overall_nucl_freqs (aggregate)
+    Dict[str, float],           # overall_dinucl_freqs (aggregate)
+    Optional[Dict[str, Dict[str, float]]], # per_sequence_nucl_freqs (NEW)
+    Optional[Dict[str, Dict[str, float]]], # per_sequence_dinucl_freqs (NEW)
+    None,                       # Placeholder for old reference_data (remains None)
     None,                       # ca_results always None now
-    Optional[pd.DataFrame]      # ca_input_df (still calculated)
+    Optional[pd.DataFrame]      # ca_input_df (RSCU wide per sequence)
 ]
 
 def run_full_analysis(
     sequences: List[SeqRecord],
     genetic_code_id: int = 1,
     reference_weights: Optional[Dict[str, float]] = None
-) -> AnalysisResultType:
+) -> FullAnalysisResultType:
     """
     Performs all analyses SEQUENTIALLY for the provided list of sequences.
     Relies on pre-loaded reference_weights for CAI/Fop/RCDI.
@@ -878,9 +961,10 @@ def run_full_analysis(
         logger.critical(f"Failed to get genetic code {genetic_code_id}. Cannot run analysis. Error: {e}")
         # Return empty/None structure
         empty_df = pd.DataFrame()
-        return empty_df, empty_df, {}, {}, None, None, None
+        return empty_df, empty_df, {}, {}, None, None, None, None, None
 
     logger.debug(f"Starting full analysis for {len(sequences)} sequences.")
+
     # Calculate overall frequencies based on the input sequences
     overall_nucl_freqs: Dict[str, float]
     total_bases: int
@@ -891,6 +975,17 @@ def run_full_analysis(
     total_dinucl: int
     overall_dinucl_freqs, total_dinucl = calculate_dinucleotide_frequencies(sequences)
     logger.debug(f"Calculated overall dinucleotide frequencies (total dinucleotides: {total_dinucl}).")
+
+    # --- NEW: Calculate per-sequence frequencies ---
+    per_sequence_nucl_freqs: Optional[Dict[str, Dict[str, float]]] = None
+    per_sequence_dinucl_freqs: Optional[Dict[str, Dict[str, float]]] = None
+    if sequences: # Only calculate if there are sequences
+        logger.debug("Calculating per-sequence nucleotide and dinucleotide frequencies...")
+        per_sequence_nucl_freqs = calculate_per_sequence_nucleotide_frequencies(sequences)
+        per_sequence_dinucl_freqs = calculate_per_sequence_dinucleotide_frequencies(sequences)
+        logger.debug("Finished calculating per-sequence frequencies.")
+    else:
+        logger.info("No sequences provided to run_full_analysis, skipping per-sequence frequency calculations.")
 
     # --- Per-Sequence Analysis (SEQUENTIAL) ---
     # `partial` fixes constant arguments for `analyze_single_sequence`
@@ -908,7 +1003,7 @@ def run_full_analysis(
     # --- Process results ---
     per_sequence_metrics_list: List[Dict[str, Any]] = []
     aggregate_codon_counts: Counter[str] = Counter()
-    sequences_for_ca: Dict[str, pd.Series] = {} # {ID: Series(RSCU)}
+    sequences_for_ca_rscu: Dict[str, pd.Series] = {} # {ID: Series(RSCU)}
 
     for result_tuple in all_results:
         if result_tuple and result_tuple[0] is not None: # Check if metrics dict exists
@@ -930,7 +1025,7 @@ def run_full_analysis(
                             # Store the RSCU vector (index=Codon, values=RSCU), fill NaN with 0.0
                             if not temp_rscu_df.empty:
                                  rscu_vector: pd.Series = temp_rscu_df.set_index('Codon')['RSCU'].fillna(0.0)
-                                 sequences_for_ca[seq_id] = rscu_vector
+                                 sequences_for_ca_rscu[seq_id] = rscu_vector
                      except Exception as rscu_err:
                           logger.warning(f"Could not calculate RSCU for CA prep for seq {seq_id}: {rscu_err}")
 
@@ -950,7 +1045,7 @@ def run_full_analysis(
          return empty_df, empty_df, overall_nucl_freqs, overall_dinucl_freqs, None, None, None
 
     # --- Aggregate Codon Usage ---
-    agg_usage_df: pd.DataFrame = empty_df # Initialize empty
+    agg_usage_df: pd.DataFrame = empty_df.copy() # Initialize empty
     if aggregate_codon_counts:
         logger.debug("Calculating aggregate codon usage (RSCU, Freq)...")
         try:
@@ -964,16 +1059,20 @@ def run_full_analysis(
              agg_usage_df = empty_df # Ensure it's empty on error
 
     # --- CA Data Preparation ---
-    ca_input_df: Optional[pd.DataFrame] = None
-    if sequences_for_ca:
+    ca_input_df_rscu_wide: Optional[pd.DataFrame] = None
+    if sequences_for_ca_rscu:
         logger.debug("Preparing CA input DataFrame (per-sequence RSCU)...")
         try:
-            ca_input_df = pd.DataFrame.from_dict(sequences_for_ca, orient='index')
+            ca_input_df_rscu_wide = pd.DataFrame.from_dict(sequences_for_ca_rscu, orient='index')
             # Ensure all coding codons are present as columns, in order
             all_codons: List[str] = sorted([c for c, aa in genetic_code.items() if aa != '*'])
-            ca_input_df = ca_input_df.reindex(columns=all_codons, fill_value=0.0)
+            ca_input_df_rscu_wide = ca_input_df_rscu_wide.reindex(columns=all_codons, fill_value=0.0)
             # Clean data (NaNs already filled, handle Inf)
-            ca_input_df.replace([np.inf, -np.inf], 0.0, inplace=True)
+            ca_input_df_rscu_wide.replace([np.inf, -np.inf], 0.0, inplace=True)
+            
+            """
+            # Filter for CA (moved to perform_ca if CA is fitted there)
+            # For now, ca_input_df_rscu_wide is the raw per-sequence RSCU table
             # Filter rows (sequences) and columns (codons) with zero/near-zero variance
             rows_before = ca_input_df.shape[0]
             cols_before = ca_input_df.shape[1]
@@ -986,14 +1085,24 @@ def run_full_analysis(
                  ca_input_df = None
             else:
                  logger.debug("CA input DataFrame prepared successfully.")
+            """
         except Exception as e:
              ca_input_df = None
              logger.exception(f"Error preparing CA input data: {e}")
 
     # --- Return all results ---
     logger.debug("run_full_analysis finished.")
-    return (agg_usage_df, per_sequence_df, overall_nucl_freqs, overall_dinucl_freqs,
-            None, None, ca_input_df)
+    return (
+        agg_usage_df,
+        per_sequence_df,
+        overall_nucl_freqs,
+        overall_dinucl_freqs,
+        per_sequence_nucl_freqs,
+        per_sequence_dinucl_freqs,
+        None,                       # Placeholder for old reference_data
+        None,                       # CA results object (always None from this func now)
+        ca_input_df_rscu_wide       # RSCU wide per sequence
+    )
 
 
 # === Statistical Comparison Function ===
@@ -1118,38 +1227,129 @@ def perform_ca(ca_input_df: pd.DataFrame, n_components: int = 10) -> Optional[Pr
         logger.error("'prince' library not installed. Cannot perform CA.")
         return None
     if ca_input_df is None or ca_input_df.empty:
-         logger.error("No valid input data provided for CA.")
+         logger.error("No valid input data provided for CA (DataFrame is None or empty).")
          return None
 
-    logger.info(f"Performing CA on DataFrame of shape {ca_input_df.shape}...")
+    logger.info(f"Initial CA input DataFrame shape: {ca_input_df.shape}")
+
     try:
-        # Ensure data is numeric (should be already, but double check)
-        ca_input_df = ca_input_df.astype(float)
+        # 1. Ensure data is numeric and clean Inf/NaN
+        ca_df_processed = ca_input_df.apply(pd.to_numeric, errors='coerce').fillna(0.0)
+        ca_df_processed.replace([np.inf, -np.inf], 0.0, inplace=True)
 
-        # Check shape again after potential filtering outside this function
-        if ca_input_df.shape[0] < 2 or ca_input_df.shape[1] < 2:
-            logger.error(f"Cannot perform CA: Input data shape ({ca_input_df.shape}) is too small (requires >= 2 rows and >= 2 columns).")
+        # Add a small constant to all cells to avoid issues with zeros if prince is sensitive
+        # This is a common technique in correspondence analysis for count data,
+        # though RSCU are not counts. Test if this helps.
+        epsilon = 1e-9
+        ca_df_processed = ca_df_processed + epsilon
+
+        # 2. Iteratively remove zero-sum rows and columns
+        # This is important because removing a column might make a row all zeros, and vice-versa.
+        logger.debug(f"Shape before iterative zero-sum filtering: {ca_df_processed.shape}")
+        rows_before, cols_before = ca_df_processed.shape
+        while True:
+            prev_shape = ca_df_processed.shape
+            
+            # Remove rows where all values are extremely close to zero
+            ca_df_processed = ca_df_processed.loc[(ca_df_processed.abs().sum(axis=1) > 1e-9)]
+            # Remove columns where all values are extremely close to zero
+            ca_df_processed = ca_df_processed.loc[:, (ca_df_processed.abs().sum(axis=0) > 1e-9)]
+            
+            if ca_df_processed.shape == prev_shape: # No more changes
+                break
+            if ca_df_processed.empty: # Stop if df becomes empty
+                break
+        
+        rows_after, cols_after = ca_df_processed.shape
+        if rows_after < rows_before:
+            logger.warning(f"Removed {rows_before - rows_after} rows with all (near) zero values from CA input during iterative filtering.")
+        if cols_after < cols_before:
+            logger.warning(f"Removed {cols_before - cols_after} columns (codons) with all (near) zero values from CA input during iterative filtering.")
+
+
+        if ca_df_processed.empty:
+            logger.error("CA input DataFrame became empty after iterative zero-sum row/column filtering. Cannot perform CA.")
+            return None
+        
+        logger.info(f"Shape after iterative zero-sum filtering: {ca_df_processed.shape}")
+
+        # 4. Verification of marginal counts
+        row_sums = ca_df_processed.sum(axis=1)
+        col_sums = ca_df_processed.sum(axis=0)
+
+        if (row_sums <= 1e-9).any():
+            problematic_rows = row_sums[row_sums <= 1e-9].index.tolist()
+            logger.warning(f"After filtering, {len(problematic_rows)} rows still sum to zero or near zero. Removing them: {problematic_rows[:5]}")
+            ca_df_processed = ca_df_processed.drop(index=problematic_rows)
+            if ca_df_processed.empty:
+                logger.error("DataFrame empty after removing zero-sum rows post-iteration. Cannot perform CA.")
+                return None
+
+        if (col_sums <= 1e-9).any():
+            problematic_cols = col_sums[col_sums <= 1e-9].index.tolist()
+            logger.warning(f"After filtering, {len(problematic_cols)} columns still sum to zero or near zero. Removing them: {problematic_cols[:5]}")
+            ca_df_processed = ca_df_processed.drop(columns=problematic_cols)
+            if ca_df_processed.empty or ca_df_processed.shape[1] == 0: # Check if no columns left
+                logger.error("DataFrame empty or has no columns after removing zero-sum columns post-iteration. Cannot perform CA.")
+                return None
+
+        logger.info(f"Shape before CA fitting (after all filters): {ca_df_processed.shape}")
+
+        # 4. Check minimum dimensions for CA
+        if ca_df_processed.shape[0] < 2 or ca_df_processed.shape[1] < 2:
+            logger.error(f"Cannot perform CA: Input data shape after filtering ({ca_df_processed.shape}) "
+                         "is too small (requires >= 2 rows and >= 2 columns).")
             return None
 
-        # Determine number of components dynamically, limited by data dimensions
-        actual_n_components: int = min(n_components,
-                                       ca_input_df.shape[0] - 1,
-                                       ca_input_df.shape[1] - 1)
-
-        if actual_n_components < 1:
-            logger.error(f"Calculated number of components for CA ({actual_n_components}) is less than 1.")
+        # 5. Determine number of components for SVD
+        # n_components for SVD must be min(n_components_user, n_rows - 1, n_cols - 1)
+        # and also prince's CA internally limits it to min(X.shape) - 1 for SVD.
+        # The number of components for prince.CA itself is different from n_components for SVD.
+        # prince.CA's n_components determines how many axes are stored.
+        
+        # Max possible components based on data dimensions
+        max_possible_svd_components = min(ca_df_processed.shape) - 1
+        if max_possible_svd_components < 1:
+            logger.error(f"Data dimensions ({ca_df_processed.shape}) too small for SVD. Cannot perform CA.")
             return None
 
-        logger.debug(f"Fitting CA with n_components = {actual_n_components}")
-        # Initialize and fit CA
-        ca = prince.CA(n_components=actual_n_components, n_iter=10, random_state=42, copy=True)
-        ca_fitted: PrinceCA = ca.fit(ca_input_df) # type: ignore # Use the potentially filtered DataFrame
-        logger.info("CA fitting completed.")
-        return ca_fitted
+        # n_components for prince.CA (how many axes to compute and store)
+        actual_n_ca_components: int = min(n_components, max_possible_svd_components)
+        if actual_n_ca_components < 1:
+             logger.error(f"Final n_components for CA ({actual_n_ca_components}) is < 1. Cannot perform CA.")
+             return None
 
-    except ValueError as ve: # Catch potential errors during fit (e.g., data issues)
-         logger.exception(f"ValueError during CA fitting: {ve}. Check input data matrix.")
+        logger.debug(f"Attempting to fit CA with n_components = {actual_n_ca_components} "
+                     f"on filtered data of shape {ca_df_processed.shape}")
+        
+        # Temporarily catch and ignore the specific RuntimeWarning from prince
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore',
+                message="invalid value encountered in divide", # Matches the warning from prince
+                category=RuntimeWarning,
+                module="prince\.ca" # Be specific to the module if possible
+            )
+            warnings.filterwarnings( # Also catch the "divide by zero encountered in power" if it's different
+                'ignore',
+                message="divide by zero encountered in power",
+                category=RuntimeWarning,
+                module="prince\.ca"
+            )
+                
+            ca = prince.CA(n_components=actual_n_ca_components, 
+                           n_iter=10, random_state=42, 
+                           copy=True)
+            ca_fitted: PrinceCA = ca.fit(ca_df_processed)
+        
+        logger.info("CA fitting completed successfully.")
+        return ca_fitted # Use the iteratively filtered DataFrame
+
+    except ValueError as ve:
+         logger.error(f"ValueError during CA fitting: {ve}. Check input data matrix.")
+         logger.debug(f"Data causing CA ValueError (first 5 rows, 5 cols):\n{ca_df_processed.iloc[:5, :5] if 'ca_df_processed' in locals() and not ca_df_processed.empty else 'DataFrame was empty or not processed'}")
          return None
-    except Exception as e: # Catch other unexpected errors from prince
-        logger.exception(f"Unexpected error during CA calculation: {e}")
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred during CA calculation: {e}")
+        logger.debug(f"Data causing unexpected CA error (first 5 rows, 5 cols):\n{ca_df_processed.iloc[:5, :5] if 'ca_df_processed' in locals() and not ca_df_processed.empty else 'DataFrame was empty or not processed'}")
         return None
