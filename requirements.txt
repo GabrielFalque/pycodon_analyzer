@@ -1,11 +1,13 @@
 # requirements.txt
+
 biopython>=1.79
 pandas>=1.3.0
 matplotlib>=3.4.0
 seaborn>=0.11.0
 numpy>=1.21.0
-# scikit-learn>=1.0 # Often a dependency of prince, list if needed directly
+scipy>=1.6.0
 prince>=0.12.1
-scipy>=1.6.0 # Added for statistical tests
-# Add importlib-resources for Python < 3.9 if needed explicitly:
-# importlib-resources; python_version<"3.9"
+scikit-learn>=1.0 # Explicitly listed as a core dependency for CA functionality via prince
+adjustText>=0.8  # For better label placement in plots
+rich>=10.0       # For enhanced console logging and progress bars
+importlib-resources>=1.0; python_version<"3.9" # For pkg_resources.files in older Python

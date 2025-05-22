@@ -1391,10 +1391,10 @@ def main() -> None:
                                 help="Max allowed 'N' percentage per sequence (0-100).")
     analyze_parser.add_argument("--plot_formats",
                                 nargs='+',
-                                default=['png'],
-                                choices=['png', 'svg', 'pdf', 'jpg'], # Added more choices
+                                default=['svg'],
+                                choices=['scg', 'png', 'pdf', 'jpg'], # Added more choices
                                 type=str.lower, # Convert to lowercase
-                                help="Output format(s) for plots (e.g., png svg).")
+                                help="Output format(s) for plots (e.g., svg png).")
     analyze_parser.add_argument("--skip_plots",
                                 action='store_true',
                                 help="Disable all plot generation.")
