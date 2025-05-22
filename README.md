@@ -109,9 +109,10 @@ The tool requires the following Python libraries:
 * `numpy >= 1.21.0`
 * `scipy >= 1.6.0`
 * `prince >= 0.12.1`
+* `scikit-learn >= 1.0` (Used by `prince` for CA functionalities)
 * `adjustText >= 0.8` (Recommended for better label placement in plots)
 * `rich >= 10.0` (For enhanced console logging and progress bars)
-* `importlib-resources >= 1.0 ; python_version<"3.9"`
+* `importlib-resources >= 1.0 ; python_version<"3.9"` (For package data access in older Python versions)
 
 These will be installed automatically when using `pip install .`.
 
