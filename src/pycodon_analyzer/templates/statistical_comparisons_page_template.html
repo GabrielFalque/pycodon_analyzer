@@ -1,0 +1,25 @@
+{% extends "base_template.html" %}
+
+{% block title %}Statistical Comparisons - PyCodon Analyzer Report{% endblock %}
+
+{% block content %}
+<h1>Statistical Comparisons Between Genes</h1>
+
+<p>This section presents the results of statistical tests (e.g., Kruskal-Wallis H-test) performed to compare key codon usage metrics and sequence properties across different genes (including the 'complete' concatenated set, if analyzed).</p>
+<p>Lower p-values suggest significant differences in the distribution of the feature across the gene groups.</p>
+
+{% if report_data.tables.gene_comparison_stats_html %}
+    {{ report_data.tables.gene_comparison_stats_html | safe }}
+{% else %}
+    <p class="unavailable">Statistical comparison results are not available. This might occur if fewer than two gene groups were successfully processed or if an error occurred during the statistical analysis.</p>
+{% endif %}
+
+<p>Download full table:
+{% if report_data.tables.gene_comparison_stats_csv_path %}
+    <a href="{{ report_data.tables.gene_comparison_stats_csv_path }}">{{ report_data.tables.gene_comparison_stats_csv_path }}</a>
+{% else %}
+    <span class="unavailable">CSV file path not available.</span>
+{% endif %}
+</p>
+
+{% endblock %}

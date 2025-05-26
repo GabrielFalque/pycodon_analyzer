@@ -1,0 +1,41 @@
+{% extends "base_template.html" %}
+
+{% block title %}Per-Gene RSCU Boxplots - PyCodon Analyzer Report{% endblock %}
+
+{% block content %}
+<h1>Per-Gene RSCU (Relative Synonymous Codon Usage) Boxplots</h1>
+
+<p>
+    Relative Synonymous Codon Usage (RSCU) is a measure of non-uniform synonymous codon usage in a coding sequence.
+    An RSCU value of 1.0 for a codon means that this codon is used exactly as expected if all synonymous codons for its amino acid were used equally.
+    Values greater than 1.0 indicate that the codon is used more frequently than expected, while values less than 1.0 indicate it's used less frequently.
+    Stop codons and codons for amino acids methionine (Met/M) and tryptophan (Trp/W) (which have only one codon) typically have an RSCU value of 1.0 by definition if present.
+</p>
+<p>
+    The boxplots below display the distribution of RSCU values for each codon across all analyzed sequences within a specific gene (or the 'complete' concatenated set).
+    Each box represents the interquartile range (IQR, 25th to 75th percentile), with the line inside the box indicating the median. Whiskers typically extend to 1.5 times the IQR from the box, and individual points beyond the whiskers are often considered outliers.
+    These plots help visualize codon usage patterns and biases for each gene.
+</p>
+
+<hr style="margin: 30px 0;">
+
+{% if report_data.plot_paths.per_gene_rscu_boxplots %}
+    {% for gene_name, plot_info in report_data.plot_paths.per_gene_rscu_boxplots.items() | sort %}
+        {# Ensure plot_info is a dict and rscu_boxplot key exists #}
+        {% if plot_info and plot_info.rscu_boxplot %}
+            <div class="plot-container">
+                <h4>RSCU Boxplot for: {{ gene_name }}</h4>
+                <img src="{{ plot_info.rscu_boxplot }}" alt="RSCU Boxplot for {{ gene_name }}" class="zoomable">
+            </div>
+        {% else %}
+            <div class="plot-container">
+                <h4>RSCU Boxplot for: {{ gene_name }}</h4>
+                <p class="unavailable">RSCU Boxplot for {{ gene_name }} is not available.</p>
+            </div>
+        {% endif %}
+    {% endfor %}
+{% else %}
+    <p class="unavailable">No per-gene RSCU boxplots are available for this report.</p>
+{% endif %}
+
+{% endblock %}

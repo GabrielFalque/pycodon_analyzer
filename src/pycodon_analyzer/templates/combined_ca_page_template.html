@@ -1,0 +1,97 @@
+{% extends "base_template.html" %}
+
+{% block title %}Combined Correspondence Analysis Results - PyCodon Analyzer Report{% endblock %}
+
+{% block content %}
+<h1>Combined Correspondence Analysis (CA) Results</h1>
+
+<p>This section presents the results of the Correspondence Analysis performed on the combined RSCU (Relative Synonymous Codon Usage) data from all successfully processed genes and the 'complete' concatenated sequences (if applicable). CA helps to identify the main axes of variation in codon usage across these sequences.</p>
+
+{% if report_data.ca_performed %}
+    <h2>CA Diagnostic Plots</h2>
+
+    <div class="plot-container">
+        <h4>Variance Explained by CA Dimensions</h4>
+        {% if report_data.plot_paths.combined_plots.ca_variance_explained %}
+            <img src="{{ report_data.plot_paths.combined_plots.ca_variance_explained }}" 
+                 alt="CA Variance Explained" 
+                 class="zoomable">
+        {% else %}
+            <p class="unavailable">Plot not available.</p>
+        {% endif %}
+    </div>
+
+    <div class="plot-container">
+        <h4>Top Contributing Codons to CA Dimension 1</h4>
+        {% if report_data.plot_paths.combined_plots.ca_contribution_dim1 %}
+            <img src="{{ report_data.plot_paths.combined_plots.ca_contribution_dim1 }}" 
+                 alt="CA Dimension 1 Codon Contributions" 
+                 class="zoomable">
+        {% else %}
+            <p class="unavailable">Plot not available.</p>
+        {% endif %}
+    </div>
+
+    <div class="plot-container">
+        <h4>Top Contributing Codons to CA Dimension 2</h4>
+        {% if report_data.plot_paths.combined_plots.ca_contribution_dim2 %}
+            <img src="{{ report_data.plot_paths.combined_plots.ca_contribution_dim2 }}" 
+                 alt="CA Dimension 2 Codon Contributions" 
+                 class="zoomable">
+        {% else %}
+            <p class="unavailable">Plot not available.</p>
+        {% endif %}
+    </div>
+
+    <h2>CA Biplot (Sequences by Gene)</h2>
+    <div class="plot-container">
+        <h4>Combined CA Biplot (Sequences colored by Gene)</h4>
+        {% if report_data.plot_paths.combined_plots.ca_biplot_combined %}
+            <img src="{{ report_data.plot_paths.combined_plots.ca_biplot_combined }}" 
+                 alt="Combined CA Biplot" 
+                 class="zoomable">
+        {% else %}
+            <p class="unavailable">Plot not available.</p>
+        {% endif %}
+    </div>
+    <p>The biplot above displays sequences as points, typically colored by their gene of origin (including the 'complete' concatenated set). Sequences with similar overall codon usage patterns across all their codons will tend to cluster together in this space. The axes represent the major sources of variation in codon usage. The spread and separation of these gene-based clusters can indicate distinct codon usage strategies or biases favored by different genes or the complete genome.</p>
+
+    <h2>CA Output Tables</h2>
+
+    <h3>Eigenvalues Summary</h3>
+    <p>This table shows the variance explained by each dimension of the Correspondence Analysis. The first column indicates the dimension number.</p>    
+    {% if report_data.tables.ca_combined_eigenvalues_html %}
+        {{ report_data.tables.ca_combined_eigenvalues_html | safe }}
+    {% else %}
+        <p class="unavailable">CA Eigenvalues table is not available.</p>
+    {% endif %}
+    <p>Download full table:
+    {% if report_data.tables.ca_combined_eigenvalues_csv_path %}
+        <a href="{{ report_data.tables.ca_combined_eigenvalues_csv_path }}">{{ report_data.tables.ca_combined_eigenvalues_csv_path }}</a>
+    {% else %}
+        <span class="unavailable">CSV file path not available.</span>
+    {% endif %}
+    </p>
+
+    <h3>Column (Codon) Contributions</h3>
+    <p>This table shows the contribution of each codon (first column) to the inertia of the dimensions. Higher values indicate a greater influence of the codon on that dimension.</p>
+    {% if report_data.tables.ca_combined_col_contributions_html %}
+        {{ report_data.tables.ca_combined_col_contributions_html | safe }}
+    {% else %}
+        <p class="unavailable">CA Column Contributions table is not available.</p>
+    {% endif %}
+    <p>Download full table:
+    {% if report_data.tables.ca_combined_col_contributions_csv_path %}
+        <a href="{{ report_data.tables.ca_combined_col_contributions_csv_path }}">{{ report_data.tables.ca_combined_col_contributions_csv_path }}</a>
+    {% else %}
+        <span class="unavailable">CSV file path not available.</span>
+    {% endif %}
+    </p>
+
+    <p>Additional CA coordinate tables (<code>ca_row_coordinates.csv</code>, <code>ca_col_coordinates.csv</code>) are available in the CSV output and in the <code>{{ report_data.report_dir_name }}/data/</code> subdirectory of this report.</p>
+
+{% else %}
+    <p class="unavailable">Combined Correspondence Analysis was skipped or did not produce results. Therefore, CA-related plots and tables are not available.</p>
+{% endif %}
+
+{% endblock %}

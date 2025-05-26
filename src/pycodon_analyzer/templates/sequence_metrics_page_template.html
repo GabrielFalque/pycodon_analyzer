@@ -1,0 +1,20 @@
+{% extends "base_template.html" %}
+
+{% block title %}Per-Sequence Metrics - PyCodon Analyzer Report{% endblock %}
+
+{% block content %}
+<h1>Per-Sequence Metrics</h1>
+
+<p>The full table of per-sequence metrics (<code>per_sequence_metrics_all_genes.csv</code>) is generated and available in the main output directory and also copied to the <code>{{ report_data.report_dir_name }}/data/</code> subdirectory of this HTML report.</p>
+
+<p>Due to its potential large size, direct display of this table in the HTML report is not implemented for now. Future versions may include interactive filtering and pagination for this data.</p>
+
+<p>You can access the full CSV file here:
+    {% if report_data.tables.per_sequence_metrics_csv_path %}
+        <a href="{{ report_data.tables.per_sequence_metrics_csv_path }}">{{ report_data.tables.per_sequence_metrics_csv_path }}</a>
+    {% else %}
+        <span class="unavailable">CSV file path not available.</span>
+    {% endif %}
+</p>
+
+{% endblock %}

@@ -489,7 +489,7 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
 
         # Saving
         safe_suffix = plot_utils.sanitize_filename(filename_suffix)
-        output_filename = os.path.join(output_dir, f"neutrality_plot{safe_suffix}.{file_format}")
+        output_filename = os.path.join(output_dir, f"neutrality_plot_{safe_suffix}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"Neutrality plot saved to: {output_filename}")
 
@@ -641,7 +641,7 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
 
         # Saving
         safe_suffix = plot_utils.sanitize_filename(filename_suffix)
-        output_filename = os.path.join(output_dir, f"enc_vs_gc3_plot{safe_suffix}.{file_format}")
+        output_filename = os.path.join(output_dir, f"enc_vs_gc3_plot_{safe_suffix}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"ENC vs GC3 plot saved to: {output_filename}")
 
@@ -652,7 +652,7 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
     finally:
         if fig is not None: plt.close(fig)
 
-# --- New function for per-gene dinucleotide abundance by metadata ---
+# --- Function for per-gene dinucleotide abundance by metadata ---
 def plot_per_gene_dinucleotide_abundance_by_metadata(
     per_sequence_oe_ratios_df: pd.DataFrame, # Cols: Dinucleotide, RelativeAbundance, and metadata_hue_col
     metadata_hue_col: str,
@@ -748,7 +748,7 @@ def plot_per_gene_dinucleotide_abundance_by_metadata(
 
         safe_gene_name = plot_utils.sanitize_filename(gene_name)
         safe_suffix_extra = plot_utils.sanitize_filename(filename_suffix_extra)
-        output_filename = os.path.join(output_dir, f"dinucl_abundance_{safe_gene_name}{safe_suffix_extra}.{file_format}")
+        output_filename = os.path.join(output_dir, f"dinucl_abundance_{safe_suffix_extra}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"Per-gene dinucleotide abundance plot saved to: {output_filename}")
 
@@ -1136,7 +1136,7 @@ def plot_ca(
 
         # Saving
         safe_suffix = plot_utils.sanitize_filename(filename_suffix)
-        output_filename = os.path.join(output_dir, f"ca_biplot_comp{comp_x+1}v{comp_y+1}{safe_suffix}.{file_format}")
+        output_filename = os.path.join(output_dir, f"ca_biplot_comp{comp_x+1}v{comp_y+1}_{safe_suffix}.{file_format}")
         plt.savefig(output_filename, dpi=300, bbox_inches='tight')
         logger.info(f"CA biplot saved to: {output_filename}")
 

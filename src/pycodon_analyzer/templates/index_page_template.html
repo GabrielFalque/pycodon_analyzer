@@ -1,0 +1,52 @@
+{% extends "base_template.html" %}
+
+{% block title %}Summary - PyCodon Analyzer Report{% endblock %}
+
+{% block content %}
+<h1>Analysis Summary</h1>
+
+<h2>Run Parameters</h2>
+<table class="params-table">
+    {% for key, value in report_data.params.items() %}
+    <tr>
+        <td>{{ key | replace('_', ' ') | title }}</td>
+        <td>{{ value }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+<h2>Overall Metrics</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Metric</th>
+            <th>Value</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Number of Gene Files Processed</td>
+            <td>{{ report_data.summary_stats.num_genes_processed }}</td>
+        </tr>
+        <tr>
+            <td>Total Valid Sequences Analyzed (across all genes)</td>
+            <td>{{ report_data.summary_stats.total_valid_sequences }}</td>
+        </tr>
+        </tbody>
+</table>
+
+<h2>Report Sections</h2>
+<p>Use the navigation menu on the left to explore detailed results for each section.</p>
+
+{% if report_data.plot_paths.combined_plots.ca_biplot_combined %}
+<div class="plot-container">
+    <h4>Combined CA Biplot (All Genes)</h4>
+    <img src="{{ report_data.plot_paths.combined_plots.ca_biplot_combined }}" 
+         alt="Combined CA Biplot" 
+         class="zoomable">
+</div>
+{% else %}
+    <p class="unavailable">Combined CA Biplot is not available.</p>
+{% endif %}
+
+{% endblock %}

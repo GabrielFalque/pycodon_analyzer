@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PyCodon Analyzer Report{% endblock %}</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            min-height: 100vh;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        .sidebar {
+            width: 260px;
+            background-color: #39424e;
+            color: #e0e0e0;
+            padding: 20px;
+            height: 100vh;
+            position: fixed;
+            overflow-y: auto;
+        }
+        .sidebar h2 {
+            color: #ffffff;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 1.5em;
+        }
+        .sidebar ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        .sidebar ul li a {
+            display: block;
+            color: #c0c8d1;
+            padding: 12px 15px;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .sidebar ul li a:hover, .sidebar ul li a.active {
+            background-color: #4f5b69;
+            color: #ffffff;
+        }
+        .main-content {
+            margin-left: 300px; /* width of sidebar + some padding */
+            padding: 25px 40px; /* Increased padding for better spacing */
+            width: calc(100% - 300px);
+            overflow-y: auto;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 10px;
+            margin-top: 30px;
+        }
+        h1 { font-size: 2.2em; }
+        h2 { font-size: 1.8em; }
+        h3 { font-size: 1.5em; }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            font-size: 0.95em;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #e9ecef;
+            font-weight: 600;
+            color: #495057;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        tr:hover {
+            background-color: #e9ecef;
+        }
+        .plot-container {
+            margin-bottom: 35px;
+            padding: 15px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .plot-container img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 0 auto;
+            border-radius: 4px;
+        }
+        .plot-container h4 {
+            margin-top: 0;
+            color: #34495e;
+            font-size: 1.2em;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        .unavailable {
+            color: #777;
+            font-style: italic;
+        }
+        .params-table td:first-child {
+            font-weight: bold;
+            width: 30%;
+        }
+        .plot-container img.zoomable {
+            cursor: zoom-in;
+        }
+        .modal {
+            /* display: none; /* Let JS handle this with 'active' class and visibility/opacity */
+            position: fixed; 
+            z-index: 1000; 
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto; /* Scroll the modal itself if dialog-container + caption is too big */
+            background-color: rgba(0,0,0,0.9);
+            visibility: hidden; /* Initially hidden */
+            opacity: 0; /* Initially transparent */
+            transition: opacity 0.3s ease-in-out, visibility 0s linear 0.3s; /* Delay visibility until opaque */
+            display: flex; /* For centering modal-dialog-container */
+            align-items: center;
+            justify-content: center;
+        }
+        .modal.active {
+            visibility: visible;
+            opacity: 1;
+            transition: opacity 0.3s ease-in-out, visibility 0s linear 0s;
+        }
+        /* Container to help with centering and sizing of the scrollable image area + caption */
+        .modal-dialog-container { /* This container wraps image scroll area and caption */
+            display: flex;
+            flex-direction: column;
+            align-items: center; 
+            justify-content: center;
+            width: auto; 
+            max-width: 95vw; /* Max width of the dialog content relative to viewport */
+            max-height: 95vh; /* Max height of the dialog content relative to viewport */
+            padding: 10px; 
+            box-sizing: border-box;
+        }
+        .modal-inner-scroll { /* This div will contain the image and have scrollbars if image is too big */
+            width: auto;  
+            height: auto; 
+            max-width: 100%; /* Takes full width of its parent, modal-dialog-container */
+                             /* Effectively max-width is 95vw minus padding */
+            max-height: calc(100% - 15px); /* Take full height of parent, minus space for caption and some padding */
+                                           /* Adjust 60px based on caption actual height + desired spacing */
+            /*max-height: calc(100% - 60px);*/ /* Take full height of parent, minus space for caption and some padding */
+                                           /* Adjust 60px based on caption actual height + desired spacing */
+            overflow: auto; /* CRITICAL: Allows scrollbars for the image if it's larger than this box */
+            text-align: center; /* Centers image if smaller than this box */
+        }
+        .modal-content { /* The image itself */
+            display: inline-block; 
+            width: auto; 
+            height: auto;
+            min-width: fit-content; /* Useful for very narrow images */
+            min-height: fit-content; /* Useful for very short images */
+            /* No max-width/max-height here, let it take its natural size inside modal-inner-scroll */
+            animation-name: zoomEffect; /* Renamed animation */
+            animation-duration: 0.3s;
+            /* cursor: grab; /* Optional: if you implement drag-to-pan later */
+        }
+        @keyframes zoomEffect { /* Renamed animation */
+            from {transform:scale(0.7); opacity: 0;}
+            to {transform:scale(1); opacity: 1;}
+        }
+        .modal-caption {
+            width: 100%; 
+            max-width: 80%; /* Max width for the caption itself */
+            text-align: center;
+            color: #ccc;
+            padding: 10px 0;
+            margin-top: 10px; 
+        }
+        .modal-close {
+            position: absolute;
+            top: 15px;
+            right: 35px;
+            color: #f1f1f1;
+            font-size: 40px;
+            font-weight: bold;
+            transition: 0.3s;
+            z-index: 1001; 
+        }
+        .modal-close:hover,
+        .modal-close:focus {
+            color: #bbb;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        /* Simple responsive adjustments */
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 100%;
+                height: auto;
+                position: relative;
+            }
+            .main-content {
+                margin-left: 0;
+                width: 100%;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>PyCodon Analyzer</h2>
+        <nav>
+            <ul>
+                {% for item in navigation_items %}
+                <li><a href="{{ item.url }}" {% if item.id == active_page %}class="active"{% endif %}>{{ item.title }}</a></li>
+                {% endfor %}
+            </ul>
+        </nav>
+    </div>
+    <div class="main-content">
+        {% block content %}
+        {% endblock %}
+    </div>
+    <div id="imageModal" class="modal">
+        <span class="modal-close" onclick="closeImageModal()">&times;</span>
+        <div class="modal-dialog-container">  {# ADDED THIS WRAPPER #}
+            <div class="modal-inner-scroll"> 
+                <img class="modal-content" id="modalImageContent">
+            </div>
+            <div id="modalCaption" class="modal-caption"></div>
+        </div>
+    </div>
+
+    <script>
+        // Ensure modalInnerScroll is defined in the correct scope for openImageModal
+        var modal = document.getElementById("imageModal");
+        var modalImg = document.getElementById("modalImageContent");
+        var captionText = document.getElementById("modalCaption");
+        var modalInnerScroll = document.querySelector(".modal-inner-scroll"); // DEFINED HERE
+
+        function openImageModal(element) {
+            if (modal && modalImg && captionText && modalInnerScroll) { // Check modalInnerScroll here
+                modal.classList.add("active");
+                document.body.style.overflow = 'hidden';
+
+                modalImg.src = element.src;
+                modalImg.style.width = 'auto'; // Let image take natural width
+                modalImg.style.height = 'auto'; // Let image take natural height
+                modalImg.style.maxWidth = 'none'; 
+                modalImg.style.maxHeight = 'none';
+                
+                captionText.innerHTML = element.alt || "Zoomed Image";
+                
+                // Reset scroll position of the inner container
+                modalInnerScroll.scrollTop = 0;
+                modalInnerScroll.scrollLeft = 0;
+            } else {
+                console.error("Modal elements not found for zooming."); // Debugging
+            }
+        }
+
+        function closeImageModal() {
+            if (modal) {
+                modal.classList.remove("active");
+                document.body.style.overflow = 'auto';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            var zoomableImages = document.querySelectorAll('img.zoomable');
+            zoomableImages.forEach(function(img) {
+                img.onclick = function() {
+                    openImageModal(this);
+                }
+            });
+            document.addEventListener('keydown', function(event) {
+                if (event.key === "Escape" && modal.classList.contains("active")) {
+                    closeImageModal();
+                }
+            });
+        });
+        
+        if (modal) {
+            modal.addEventListener('click', function(event) {
+                // Close if clicked on the .modal background, but not on .modal-dialog-container or its children
+                if (event.target === modal) { 
+                    closeImageModal();
+                }
+            });
+        }
+    </script>
+</body>
+</html>

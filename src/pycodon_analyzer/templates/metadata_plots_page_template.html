@@ -1,0 +1,84 @@
+{% extends "base_template.html" %}
+
+{% block title %}Per-Gene Plots by {{ report_data.metadata_info.column_used_for_coloring }} - PyCodon Analyzer Report{% endblock %}
+
+{% block content %}
+<h1>Per-Gene Plots Colored by Metadata: '{{ report_data.metadata_info.column_used_for_coloring }}'</h1>
+
+<p>
+    This section displays various plots for each gene (including the 'complete' concatenated set, if analyzed),
+    where data points or series are colored based on the categories found in the metadata column
+    '<strong>{{ report_data.metadata_info.column_used_for_coloring }}</strong>'.
+    {% if report_data.metadata_info.categories_shown %}
+        The categories plotted are: {{ report_data.metadata_info.categories_shown | join(', ') }}.
+        {% if report_data.metadata_info.other_category_used %}
+            (Other categories, if any, were grouped into an "Other" category).
+        {% endif %}
+    {% endif %}
+    These plots help in visually correlating codon usage patterns and sequence properties with the provided metadata.
+</p>
+<p>
+    All plots in this section are also available in their respective subdirectories:
+    <code>{{ report_data.output_dir_root_name }}/{{ report_data.metadata_info.column_used_for_coloring | sanitize_filename }}_per_gene_plots/</code>
+</p>
+
+
+<hr style="margin: 30px 0;">
+
+{# Iterate through each gene that has metadata plots #}
+{# The data structure is expected to be: report_data.plot_paths.per_gene_metadata_plots[metadata_column_name][gene_name][plot_type_key] #}
+{% set meta_col_name = report_data.metadata_info.column_used_for_coloring %}
+{% if report_data.plot_paths.per_gene_metadata_plots and report_data.plot_paths.per_gene_metadata_plots[meta_col_name] %}
+    {% for gene_name, plots in report_data.plot_paths.per_gene_metadata_plots[meta_col_name].items() | sort %}
+        <div class="gene-metadata-section" style="margin-bottom: 40px; padding-top:20px; border-top: 1px solid #ccc;">
+            <h2>Gene: {{ gene_name }}</h2>
+            <p>Plots for '{{ gene_name }}' colored by '{{ meta_col_name }}'.
+            Individual plot files are located in the subdirectory:
+            <code>{{ report_data.output_dir_root_name }}/{{ meta_col_name | sanitize_filename }}_per_gene_plots/{{ gene_name | sanitize_filename }}/</code>
+            </p>
+
+            <div class="plot-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px;">
+
+                <div class="plot-container">
+                    <h4>ENC vs GC3 Plot</h4>
+                    {% if plots.enc_vs_gc3 %}
+                        <img src="{{ plots.enc_vs_gc3 }}" alt="ENC vs GC3 for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
+                    {% else %}
+                        <p class="unavailable">Plot not available.</p>
+                    {% endif %}
+                </div>
+
+                <div class="plot-container">
+                    <h4>Neutrality Plot</h4>
+                    {% if plots.neutrality %}
+                        <img src="{{ plots.neutrality }}" alt="Neutrality Plot for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
+                    {% else %}
+                        <p class="unavailable">Plot not available.</p>
+                    {% endif %}
+                </div>
+
+                <div class="plot-container">
+                    <h4>Correspondence Analysis (CA) Biplot</h4>
+                    {% if plots.ca_biplot %}
+                        <img src="{{ plots.ca_biplot }}" alt="CA Biplot for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
+                    {% else %}
+                        <p class="unavailable">Plot not available.</p>
+                    {% endif %}
+                </div>
+
+                <div class="plot-container">
+                    <h4>Relative Dinucleotide Abundance</h4>
+                    {% if plots.dinucl_abundance %}
+                        <img src="{{ plots.dinucl_abundance }}" alt="Dinucleotide Abundance for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
+                    {% else %}
+                        <p class="unavailable">Plot not available.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% endfor %}
+{% else %}
+    <p class="unavailable">No per-gene plots colored by metadata '{{ meta_col_name }}' are available for this report.</p>
+{% endif %}
+
+{% endblock %}

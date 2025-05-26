@@ -1,0 +1,68 @@
+{% extends "base_template.html" %}
+
+{% block title %}Correlation Heatmaps - PyCodon Analyzer Report{% endblock %}
+
+{% block content %}
+<h1>Correlation Heatmaps</h1>
+
+<p>This section displays heatmaps illustrating correlations between various calculated features.
+The correlation method used (e.g., Spearman) is indicated in the plot titles or filenames.
+Values range from -1 (perfect negative correlation) to +1 (perfect positive correlation), with 0 indicating no linear correlation.
+The intensity and color of the cells represent the strength and direction of the correlation.
+</p>
+
+<h2>Feature Correlation Heatmap</h2>
+<div class="plot-container">
+    <h4>Correlation Between Calculated Sequence Metrics</h4>
+    {% if report_data.plot_paths.combined_plots.feature_correlation_heatmap %}
+        <img src="{{ report_data.plot_paths.combined_plots.feature_correlation_heatmap }}" 
+             alt="Feature Correlation Heatmap" 
+             class="zoomable">
+    {% else %}
+        <p class="unavailable">Feature Correlation Heatmap is not available.</p>
+    {% endif %}
+</div>
+<p>
+    This heatmap shows the pairwise correlations between various sequence metrics calculated across all valid sequences
+    (e.g., GC content, ENC, CAI, RCDI, protein properties like GRAVY and Aromaticity, sequence length, etc.).
+    It helps to identify potential relationships or co-variation between different measures of codon usage and
+    sequence composition. For example, a strong positive correlation between CAI and GC3 might suggest that
+    adaptation to preferred codons is linked to GC content at the third codon position.
+    Annotations on the cells indicate the correlation coefficient.
+</p>
+
+<hr style="margin: 40px 0;">
+
+<h2>CA Axes vs. Features Correlation Heatmap</h2>
+<div class="plot-container">
+    <h4>Correlation of CA Axes with Sequence Features and RSCU Values</h4>
+    {% if report_data.plot_paths.combined_plots.ca_axes_feature_corr %}
+        <img src="{{ report_data.plot_paths.combined_plots.ca_axes_feature_corr }}" 
+            alt="CA Axes vs Features Correlation Heatmap"
+            class="zoomable">
+    {% else %}
+        <p class="unavailable">CA Axes vs. Features Correlation Heatmap is not available.</p>
+    {% endif %}
+</div>
+<p>
+    This heatmap displays the correlation between the main axes (e.g., Dimension 1 and Dimension 2) derived from the
+    <strong>combined Correspondence Analysis (CA)</strong> and various sequence features. These features include both
+    the calculated metrics (like GC, ENC, CAI) and the RSCU values for each individual codon.
+    Significant correlations (typically p < 0.05) are often marked with an asterisk (*).
+</p>
+<p>
+    Interpreting this plot can reveal which sequence characteristics or codon preferences drive the major trends
+    in codon usage variation captured by the CA. For instance:
+</p>
+<ul>
+    <li>A strong positive correlation between CA Dimension 1 and the RSCU of GC-ending codons, coupled with a
+        negative correlation with AT-ending codons, would suggest that Dimension 1 primarily separates sequences
+        based on their GC bias in synonymous codon choice.</li>
+    <li>Correlations with metrics like CAI or ENC can indicate whether the main CA axes are associated with
+        translational selectionหรือ codon usage evenness.</li>
+</ul>
+<p>
+    This helps to give a biological or mechanistic interpretation to the abstract axes of the CA.
+</p>
+
+{% endblock %}

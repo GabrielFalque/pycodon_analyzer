@@ -74,6 +74,7 @@ from . import analysis
 from . import plotting
 from . import utils
 from . import extraction
+from . import reporting
 from .utils import load_reference_usage, get_genetic_code, clean_and_filter_sequences
 from .analysis import PrinceCA, FullAnalysisResultType
 
@@ -798,7 +799,6 @@ def _generate_plots_per_gene_colored_by_metadata(
         # --- Plotting ENC vs GC3 & Neutrality (uses gene_specific_metrics_meta_df) ---
         plot_title_prefix = f"Gene {gene_name}: "
         filename_suffix_for_gene = f"_{utils.sanitize_filename(gene_name)}_by_{utils.sanitize_filename(metadata_col_for_color)}"
-        
         if not args.skip_plots:
             for fmt in args.plot_formats:
                 plotting.plot_enc_vs_gc3(
@@ -921,9 +921,19 @@ def _generate_all_combined_plots(
         try:
             if combined_per_sequence_df is not None:
                 plotting.plot_gc_means_barplot(combined_per_sequence_df, str(output_dir_path), fmt, 'Gene')
-                plotting.plot_enc_vs_gc3(combined_per_sequence_df, str(output_dir_path), fmt, 'Gene', palette=gene_color_map)
-                plotting.plot_neutrality(combined_per_sequence_df, str(output_dir_path), fmt, 'Gene', palette=gene_color_map)
-                
+                plotting.plot_enc_vs_gc3(combined_per_sequence_df, 
+                                         output_dir=str(output_dir_path), 
+                                         file_format=fmt, 
+                                         group_by_col='Gene', 
+                                         palette=gene_color_map,
+                                         filename_suffix="_grouped_by_gene")
+                plotting.plot_neutrality(combined_per_sequence_df, 
+                                         output_dir=str(output_dir_path), 
+                                         file_format=fmt, 
+                                         group_by_col='Gene', 
+                                         palette=gene_color_map,
+                                         filename_suffix="_grouped_by_gene")
+
                 features_for_corr = ['GC', 'GC1', 'GC2', 'GC3', 'GC12', 'ENC', 'CAI', 'RCDI', 'Aromaticity', 'GRAVY', 'Length', 'TotalCodons']
                 available_corr_feat = [f for f in features_for_corr if f in combined_per_sequence_df.columns]
                 if len(available_corr_feat) > 1:
@@ -1172,6 +1182,261 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
     # 16. Save Remaining Output Tables
     _save_main_output_tables(output_dir_path, combined_per_sequence_df_with_meta, # type: ignore
                              mean_summary_df, comparison_results_df)
+    
+    # 17. Generate HTML report if argument
+    if args.html_report:
+        if not reporting.JINJA2_AVAILABLE:
+            logger.error("Cannot generate HTML report: Jinja2 library is not installed. Please install it (`pip install Jinja2`).")
+        else:
+            logger.info("Preparing data for HTML report generation...")
+            report_gen = reporting.HTMLReportGenerator(output_dir_path, vars(args))
+
+            # 1. Add summary statistics
+            num_processed_genes = len(successfully_processed_genes) if successfully_processed_genes else 0
+            total_valid_seqs = len(combined_per_sequence_df_with_meta) if combined_per_sequence_df_with_meta is not None else 0
+            report_gen.add_summary_data(num_genes_processed=num_processed_genes, total_valid_sequences=total_valid_seqs)
+
+            # --- Calculate the summary of sequence count/length per gene ---
+            gene_sequence_summary_df = None
+            if combined_per_sequence_df_with_meta is not None and not combined_per_sequence_df_with_meta.empty and \
+               'Gene' in combined_per_sequence_df_with_meta.columns and \
+               'Length' in combined_per_sequence_df_with_meta.columns:
+                try:
+                    gene_sequence_summary_df = combined_per_sequence_df_with_meta.groupby('Gene').agg(
+                        num_sequences=('ID', 'count'),
+                        mean_length=('Length', 'mean'),
+                        min_length=('Length', 'min'),
+                        max_length=('Length', 'max')
+                    ).reset_index()
+                    gene_sequence_summary_df.rename(columns={
+                        'Gene': 'Gene Name',
+                        'num_sequences': 'Number of Sequences',
+                        'mean_length': 'Mean Length (bp)',
+                        'min_length': 'Min Length (bp)',
+                        'max_length': 'Max Length (bp)'
+                    }, inplace=True)
+                    # Format float columns
+                    for col in ['Mean Length (bp)']:
+                        if col in gene_sequence_summary_df.columns:
+                             gene_sequence_summary_df[col] = gene_sequence_summary_df[col].round(1)
+                    logger.debug("Generated gene sequence summary table for HTML report.")
+                except Exception as e:
+                    logger.error(f"Could not generate gene sequence summary table for HTML report: {e}")
+                    gene_sequence_summary_df = pd.DataFrame() # Empty df if error
+
+
+            # 2. Add tables (DataFrames)
+            report_gen.add_table(
+                "per_sequence_metrics",
+                combined_per_sequence_df_with_meta,
+                table_id="seq_metrics_table", # ID still useful if JS is added later
+                display_in_html=False # Instruct not to render the full table
+            )
+            report_gen.add_table("gene_sequence_summary", 
+                                 gene_sequence_summary_df, 
+                                 table_id="gene_summary_table")
+            report_gen.add_table("mean_features_per_gene", 
+                                 mean_summary_df, 
+                                 table_id="mean_features_table")
+            report_gen.add_table("gene_comparison_stats", 
+                                 comparison_results_df, 
+                                 table_id="stats_comp_table")
+
+            # For CA tables, ensure they are DataFrames before passing
+            if ca_results_combined and combined_ca_input_df_final is not None:
+                ca_performed_successfully = True
+                if hasattr(ca_results_combined, 
+                           'row_coordinates'):
+                    df_ca_row = ca_results_combined.row_coordinates(combined_ca_input_df_final)
+                    report_gen.add_table("ca_combined_row_coordinates", 
+                                         df_ca_row, 
+                                         table_id="ca_row_coords_table", 
+                                         display_in_html=False, 
+                                         display_index=True)
+                if hasattr(ca_results_combined, 
+                           'column_coordinates'):
+                    df_ca_col = ca_results_combined.column_coordinates(combined_ca_input_df_final)
+                    report_gen.add_table("ca_combined_col_coordinates", 
+                                         df_ca_col, 
+                                         table_id="ca_col_coords_table", 
+                                         display_in_html=False, 
+                                         display_index=True)
+                if hasattr(ca_results_combined, 
+                           'column_contributions_'):
+                    df_ca_contrib = ca_results_combined.column_contributions_
+                    report_gen.add_table("ca_combined_col_contributions", 
+                                         df_ca_contrib, 
+                                         table_id="ca_col_contrib_table", 
+                                         display_index=True)
+                if hasattr(ca_results_combined, 
+                           'eigenvalues_summary'):
+                    df_ca_eigen = ca_results_combined.eigenvalues_summary
+                    report_gen.add_table("ca_combined_eigenvalues", 
+                                         df_ca_eigen, 
+                                         table_id="ca_eigen_table", 
+                                         display_index=True)
+                    
+            report_gen.set_ca_performed_status(ca_performed_successfully) # Pass status to generator
+
+            if combined_ca_input_df_final is not None:
+                 report_gen.add_table("per_sequence_rscu_wide", 
+                                      combined_ca_input_df_final, 
+                                      table_id="rscu_wide_table",
+                                      display_in_html=False)
+            
+
+            # 3. Add paths to COMBINED plots (chemins absolus des fichiers déjà sauvegardés)
+            # Assumes plot functions save files and we know their names
+            # The key used here (e.g., "gc_means") should match what the template expects.
+            # This requires knowing the exact filenames generated by plotting functions.
+            # We also need to handle multiple plot formats if the user requested them.
+            # For simplicity, let's assume we pick the first format from args.plot_formats for the HTML report.
+            # A more robust way would be to have plotting functions return the path of the saved file.
+
+            report_plot_format = args.plot_formats[0] # Use the first specified format for the report
+
+            # Helper to construct plot paths - this assumes a fixed naming convention from your plotting functions
+            def get_plot_path(name_pattern: str) -> Optional[str]:
+                # Example: name_pattern = "gc_means_barplot_by_Gene"
+                # This needs to be robust. For now, direct construction.
+                p_path = output_dir_path / f"{name_pattern}.{report_plot_format}"
+                return str(p_path) if p_path.exists() else None
+
+            report_gen.add_plot("gc_means_barplot_by_Gene", 
+                                get_plot_path("gc_means_barplot_by_Gene"), 
+                                category="combined_plots")
+            report_gen.add_plot("enc_vs_gc3_combined", 
+                                get_plot_path(
+                                    f"enc_vs_gc3_plot_{utils.sanitize_filename('_grouped_by_gene')}"
+                                    ), 
+                                category="combined_plots")
+            report_gen.add_plot("neutrality_plot_combined", 
+                                get_plot_path(
+                                    f"neutrality_plot_{utils.sanitize_filename('_grouped_by_gene')}"
+                                    ), 
+                                category="combined_plots")
+            report_gen.add_plot("relative_dinucleotide_abundance_combined", 
+                                get_plot_path("relative_dinucleotide_abundance"), 
+                                category="combined_plots")
+            
+            # Add CA plots for the report
+            if not args.skip_ca:
+                ca_suffix_combined = utils.sanitize_filename('_combined_by_gene')
+                report_gen.add_plot(
+                    "ca_biplot_combined", 
+                    get_plot_path(
+                        f"ca_biplot_comp{args.ca_dims[0]+1}v{args.ca_dims[1]+1}_{ca_suffix_combined}"
+                        ), 
+                    category="combined_plots"
+                )
+                report_gen.add_plot(
+                    "ca_variance_explained", 
+                    get_plot_path(
+                        f"ca_variance_explained_top{10}" # Assuming N=10
+                        ), 
+                    category="combined_plots"
+                )
+                report_gen.add_plot(
+                    "ca_contribution_dim1", 
+                    get_plot_path(
+                        f"ca_contribution_dim{1}_top{10}" # Assuming N=10, Dim=1
+                        ), 
+                    category="combined_plots"
+                )
+                report_gen.add_plot(
+                    "ca_contribution_dim2", 
+                    get_plot_path(
+                        f"ca_contribution_dim{2}_top{10}" # Assuming N=10, Dim=2
+                        ), 
+                    category="combined_plots"
+                    )
+            
+            report_gen.add_plot("feature_correlation_heatmap", 
+                                get_plot_path(f"feature_correlation_heatmap_spearman"), 
+                                category="combined_plots") # Assumes spearman
+            # For ca_axes_feature_corr, the name depends on the method, assuming Spearman for now
+            ca_axes_corr_method_name_sanitized = utils.sanitize_filename("Spearman")
+            report_gen.add_plot(
+                "ca_axes_feature_corr", 
+                get_plot_path(f"ca_axes_feature_corr_{ca_axes_corr_method_name_sanitized}"),
+                category="combined_plots"
+            )
+
+            # 4. Add paths to per-gene RSCU boxplots
+            # These are saved in output_dir_path directly by process_analyze_gene_file
+            if 'successfully_processed_genes' in locals() and successfully_processed_genes:
+                for gene_name_for_plot in successfully_processed_genes: #
+                    plot_fn = f"RSCU_boxplot_{utils.sanitize_filename(gene_name_for_plot)}.{report_plot_format}"
+                    target_dict_rscu = report_gen.report_data["plot_paths"]["per_gene_rscu_boxplots"].setdefault(gene_name_for_plot, {})
+                    report_gen.add_plot(
+                        plot_key="rscu_boxplot", # Generic key for this type of plot for the gene
+                        plot_abs_path=str(output_dir_path / plot_fn),
+                        category="per_gene_rscu_boxplots", # Not strictly needed if target_dict provided
+                        plot_dict_target=target_dict_rscu
+                    )
+            # Handle "complete" set boxplot
+            if "complete" in all_nucl_freqs_by_gene_agg:
+                plot_fn_complete = f"RSCU_boxplot_complete.{report_plot_format}"
+                target_dict_rscu_complete = report_gen.report_data["plot_paths"]["per_gene_rscu_boxplots"].setdefault("complete", {})
+                report_gen.add_plot(
+                    plot_key="rscu_boxplot",
+                    plot_abs_path=str(output_dir_path / plot_fn_complete),
+                    category="per_gene_rscu_boxplots",
+                    plot_dict_target=target_dict_rscu_complete
+                )
+
+
+            # 5. Add paths to per-gene plots colored by metadata (if generated)
+            if args.color_by_metadata and metadata_df is not None and 'palette_categories_for_map' in locals() :
+                meta_col = args.color_by_metadata
+                report_gen.report_data["metadata_info"]["column_used_for_coloring"] = meta_col
+                report_gen.report_data["metadata_info"]["categories_shown"] = palette_categories_for_map # List of categories actually plotted
+                report_gen.report_data["metadata_info"]["other_category_used"] = "Other" in palette_categories_for_map # Boolean
+
+                # Initialize the first level for this metadata column
+                meta_col_plot_data = report_gen.report_data["plot_paths"]["per_gene_metadata_plots"].setdefault(meta_col, {})
+
+                meta_plot_base_rel_dir_name = f"{utils.sanitize_filename(meta_col)}_per_gene_plots"
+                meta_plot_abs_base_dir = output_dir_path / meta_plot_base_rel_dir_name
+
+                # Iterate through genes for which metadata plots were generated
+                # Assuming combined_per_sequence_df_with_meta['Gene'].unique() gives these genes
+                # This list should include 'complete' if it was processed with metadata context
+                genes_with_metadata_plots = []
+                if combined_per_sequence_df_with_meta is not None:
+                    genes_with_metadata_plots = combined_per_sequence_df_with_meta['Gene'].unique()
+
+                for gene_name_for_meta_plot in genes_with_metadata_plots:
+                    gene_specific_meta_plot_dir = meta_plot_abs_base_dir / utils.sanitize_filename(gene_name_for_meta_plot)
+                    
+                    # Target dictionary for this specific gene's metadata plots
+                    gene_plot_target_dict = meta_col_plot_data.setdefault(gene_name_for_meta_plot, {})
+
+                    filename_suffix_meta_gene = f"_{utils.sanitize_filename(gene_name_for_meta_plot)}_by_{utils.sanitize_filename(meta_col)}"
+
+                    plot_types_filename_map = {
+                        "enc_vs_gc3": f"enc_vs_gc3_plot{filename_suffix_meta_gene}",
+                        "neutrality": f"neutrality_plot{filename_suffix_meta_gene}",
+                        "ca_biplot": f"ca_biplot_comp{args.ca_dims[0]+1}v{args.ca_dims[1]+1}{filename_suffix_meta_gene}",
+                        "dinucl_abundance": f"dinucl_abundance{filename_suffix_meta_gene}"
+                    }
+
+                    for plot_type_key, filename_base in plot_types_filename_map.items():
+                        plot_filename = f"{filename_base}.{report_plot_format}" # report_plot_format from earlier
+                        abs_path = gene_specific_meta_plot_dir / plot_filename
+                        report_gen.add_plot(
+                            plot_key=plot_type_key,
+                            plot_abs_path=str(abs_path),
+                            category="per_gene_metadata_plots", # For internal grouping, not directly used by add_plot if target provided
+                            plot_dict_target=gene_plot_target_dict 
+                        )
+            else: # Ensure metadata_info is still somewhat present to avoid KeyErrors in template if not set
+                report_gen.report_data["metadata_info"]["column_used_for_coloring"] = None
+                report_gen.report_data["metadata_info"]["categories_shown"] = []
+                report_gen.report_data["metadata_info"]["other_category_used"] = False
+            
+            # 6. Generate the actual HTML files
+            report_gen.generate_report()
 
     logger.info("PyCodon Analyzer 'analyze' command finished successfully.")
 
@@ -1446,6 +1711,11 @@ def main() -> None:
              "categories than this number, plots will only show the top N most frequent "
              "categories, and the rest will be grouped into an 'Other' category. (Default: 15)."
     )
+    analyze_parser.add_argument(
+        "--html_report",
+        action="store_true",
+        help="Generate a consolidated HTML report of the analysis results."
+    )
     # Example for a future feature related to metadata:
     # analyze_parser.add_argument(
     #     "--correlate_ca_with_metadata_cols",
@@ -1489,9 +1759,8 @@ def main() -> None:
     # --- Parse Arguments ---
     args = parser.parse_args()
 
-    # --- Configure Logging (remains unchanged) ---
+    # --- Configure Logging ---
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    # ... (rest of logging configuration) ...
     if RICH_AVAILABLE: # pragma: no cover
         handler_to_use: logging.Handler = RichHandler(
             rich_tracebacks=True, show_path=False, markup=True, show_level=True, log_time_format="[%X]"

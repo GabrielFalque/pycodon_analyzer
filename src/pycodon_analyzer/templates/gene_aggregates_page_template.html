@@ -1,0 +1,89 @@
+{% extends "base_template.html" %}
+
+{% block title %}Per-Gene Aggregate Analysis - PyCodon Analyzer Report{% endblock %}
+
+{% block content %}
+<h1>Per-Gene Aggregate Analysis</h1>
+
+<p>This section provides an overview of metrics aggregated at the gene level (including the 'complete' concatenated set, if analyzed).</p>
+
+<h2>Gene Summary: Sequence Counts and Lengths</h2>
+{% if report_data.tables.gene_sequence_summary_html %}
+    {{ report_data.tables.gene_sequence_summary_html | safe }}
+    <p><small>Note: Sequence lengths for 'complete' represent concatenated lengths. For individual genes, typical length or range of lengths from input sequences is shown.</small></p>
+{% else %}
+    <p class="unavailable">Gene sequence summary table is not available.</p>
+{% endif %}
+<p>Download full table:
+{% if report_data.tables.gene_sequence_summary_csv_path %}
+    <a href="{{ report_data.tables.gene_sequence_summary_csv_path }}">{{ report_data.tables.gene_sequence_summary_csv_path }}</a>
+{% else %}
+    <span class="unavailable">CSV file path not available.</span>
+{% endif %}
+</p>
+
+
+<h2>Mean Features per Gene</h2>
+<p>The table below shows the average values for various calculated metrics for each gene and the 'complete' set.</p>
+{% if report_data.tables.mean_features_per_gene_html %}
+    {{ report_data.tables.mean_features_per_gene_html | safe }}
+{% else %}
+    <p class="unavailable">Mean features per gene table is not available.</p>
+{% endif %}
+<p>Download full table:
+{% if report_data.tables.mean_features_per_gene_csv_path %}
+    <a href="{{ report_data.tables.mean_features_per_gene_csv_path }}">{{ report_data.tables.mean_features_per_gene_csv_path }}</a>
+{% else %}
+    <span class="unavailable">CSV file path not available.</span>
+{% endif %}
+</p>
+
+
+<h2>Aggregate Plots by Gene</h2>
+<p>These plots show trends across all analyzed genes.</p>
+
+<div class="plot-container">
+    <h4>Mean GC Content by Gene</h4>
+    {% if report_data.plot_paths.combined_plots.gc_means_barplot_by_Gene %}
+        <img src="{{ report_data.plot_paths.combined_plots.gc_means_barplot_by_Gene }}" 
+             alt="Mean GC Content by Gene" 
+             class="zoomable">
+    {% else %}
+        <p class="unavailable">Plot not available.</p>
+    {% endif %}
+</div>
+
+<div class="plot-container">
+    <h4>Relative Dinucleotide Abundance by Gene</h4>
+    {% if report_data.plot_paths.combined_plots.relative_dinucleotide_abundance_combined %}
+        <img src="{{ report_data.plot_paths.combined_plots.relative_dinucleotide_abundance_combined }}" 
+             alt="Relative Dinucleotide Abundance by Gene" 
+             class="zoomable">
+    {% else %}
+        <p class="unavailable">Plot not available.</p>
+    {% endif %}
+</div>
+
+<div class="plot-container">
+    <h4>ENC vs GC3 (Colored by Gene)</h4>
+    {% if report_data.plot_paths.combined_plots.enc_vs_gc3_combined %}
+        <img src="{{ report_data.plot_paths.combined_plots.enc_vs_gc3_combined }}" 
+             alt="ENC vs GC3 Colored by Gene" 
+             class="zoomable">
+    {% else %}
+        <p class="unavailable">Plot not available.</p>
+    {% endif %}
+</div>
+
+<div class="plot-container">
+    <h4>Neutrality Plot (Colored by Gene)</h4>
+    {% if report_data.plot_paths.combined_plots.neutrality_plot_combined %}
+        <img src="{{ report_data.plot_paths.combined_plots.neutrality_plot_combined }}" 
+             alt="Neutrality Plot Colored by Gene" 
+             class="zoomable">
+    {% else %}
+        <p class="unavailable">Plot not available.</p>
+    {% endif %}
+</div>
+
+{% endblock %}
