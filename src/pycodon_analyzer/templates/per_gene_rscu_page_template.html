@@ -25,7 +25,7 @@
         {% if plot_info and plot_info.rscu_boxplot %}
             <div class="plot-container">
                 <h4>RSCU Boxplot for: {{ gene_name }}</h4>
-                <img src="{{ plot_info.rscu_boxplot }}" alt="RSCU Boxplot for {{ gene_name }}" class="zoomable">
+                <img src="{{ report_data.base_path_to_root }}{{ plot_info.rscu_boxplot }}" alt="RSCU Boxplot for {{ gene_name }}" class="zoomable">
             </div>
         {% else %}
             <div class="plot-container">

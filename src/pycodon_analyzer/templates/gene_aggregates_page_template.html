@@ -16,7 +16,7 @@
 {% endif %}
 <p>Download full table:
 {% if report_data.tables.gene_sequence_summary_csv_path %}
-    <a href="{{ report_data.tables.gene_sequence_summary_csv_path }}">{{ report_data.tables.gene_sequence_summary_csv_path }}</a>
+<a href="{{ report_data.base_path_to_html_assets }}data/{{ report_data.tables.gene_sequence_summary_csv_filename }}">{{ report_data.tables.gene_sequence_summary_csv_filename }}</a>
 {% else %}
     <span class="unavailable">CSV file path not available.</span>
 {% endif %}
@@ -31,8 +31,8 @@
     <p class="unavailable">Mean features per gene table is not available.</p>
 {% endif %}
 <p>Download full table:
-{% if report_data.tables.mean_features_per_gene_csv_path %}
-    <a href="{{ report_data.tables.mean_features_per_gene_csv_path }}">{{ report_data.tables.mean_features_per_gene_csv_path }}</a>
+    {% if report_data.tables.mean_features_per_gene_csv_filename %}
+    <a href="{{ report_data.base_path_to_html_assets }}data/{{ report_data.tables.mean_features_per_gene_csv_filename }}">{{ report_data.tables.mean_features_per_gene_csv_filename }}</a>
 {% else %}
     <span class="unavailable">CSV file path not available.</span>
 {% endif %}
@@ -45,7 +45,7 @@
 <div class="plot-container">
     <h4>Mean GC Content by Gene</h4>
     {% if report_data.plot_paths.combined_plots.gc_means_barplot_by_Gene %}
-        <img src="{{ report_data.plot_paths.combined_plots.gc_means_barplot_by_Gene }}" 
+    <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.gc_means_barplot_by_Gene }}"
              alt="Mean GC Content by Gene" 
              class="zoomable">
     {% else %}
@@ -56,7 +56,7 @@
 <div class="plot-container">
     <h4>Relative Dinucleotide Abundance by Gene</h4>
     {% if report_data.plot_paths.combined_plots.relative_dinucleotide_abundance_combined %}
-        <img src="{{ report_data.plot_paths.combined_plots.relative_dinucleotide_abundance_combined }}" 
+        <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.relative_dinucleotide_abundance_combined }}" 
              alt="Relative Dinucleotide Abundance by Gene" 
              class="zoomable">
     {% else %}
@@ -67,7 +67,7 @@
 <div class="plot-container">
     <h4>ENC vs GC3 (Colored by Gene)</h4>
     {% if report_data.plot_paths.combined_plots.enc_vs_gc3_combined %}
-        <img src="{{ report_data.plot_paths.combined_plots.enc_vs_gc3_combined }}" 
+        <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.enc_vs_gc3_combined }}" 
              alt="ENC vs GC3 Colored by Gene" 
              class="zoomable">
     {% else %}
@@ -78,7 +78,7 @@
 <div class="plot-container">
     <h4>Neutrality Plot (Colored by Gene)</h4>
     {% if report_data.plot_paths.combined_plots.neutrality_plot_combined %}
-        <img src="{{ report_data.plot_paths.combined_plots.neutrality_plot_combined }}" 
+        <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.neutrality_plot_combined }}" 
              alt="Neutrality Plot Colored by Gene" 
              class="zoomable">
     {% else %}

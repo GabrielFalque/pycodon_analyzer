@@ -68,11 +68,12 @@ class HTMLReportGenerator:
             logger.error("Jinja2 is not installed. Cannot generate HTML report. Please install with 'pip install Jinja2'")
             raise ImportError("Jinja2 is required for HTML report generation.")
 
-        self.output_dir_root = Path(output_dir_root)
-        # self.report_html_dir is where index.html and other HTML files will reside
-        self.report_html_dir = self.output_dir_root / "html_report"
-        self.report_img_dir = self.report_html_dir / "images"
-        self.report_data_dir = self.report_html_dir / "data"
+        self.output_dir_root = Path(output_dir_root) # e.g., codon_analysis_results/
+
+        self.main_report_file_path = self.output_dir_root / "report.html"
+        self.secondary_html_pages_dir = self.output_dir_root / "html"
+        self.report_img_dir = self.secondary_html_pages_dir / "images"
+        self.report_data_dir = self.secondary_html_pages_dir / "data"
 
         self.run_params = run_params
         self.template_dir = Path(__file__).parent / "templates"
@@ -95,8 +96,10 @@ class HTMLReportGenerator:
             },
             "metadata_info": {},
             "navigation_items": [],
-            "report_dir_name": self.report_html_dir.name, # e.g., "html_report"
-            "output_dir_root_name": self.output_dir_root.name # e.g., "codon_analysis_results"
+            "report_main_file_name": self.main_report_file_path.name, # "report.html"
+            "secondary_pages_dirname": self.secondary_html_pages_dir.name, # "html"
+            # output_dir_root_name is still useful for context if needed in templates
+            "output_dir_root_name": self.output_dir_root.name
         }
         self.pages_to_generate: List[Dict[str,str]] = []
 
@@ -107,42 +110,45 @@ class HTMLReportGenerator:
     def _setup_report_directory(self):
         """Creates the main HTML report directory and subdirectories for assets."""
         try:
-            if self.report_html_dir.exists():
-                logger.info(f"Cleaning up existing report directory: {self.report_html_dir}")
-                # Careful with shutil.rmtree, ensure it's the correct path
-                # For safety, one might choose to only remove specific files/subdirs
-                # shutil.rmtree(self.report_html_dir) # Deactivated for safety, can be re-enabled
-            self.report_html_dir.mkdir(parents=True, exist_ok=True)
+            # Main output directory (where report.html will be) should already exist or be creatable by parent process
+            self.output_dir_root.mkdir(parents=True, exist_ok=True)
+            
+            # Create the 'html' subdirectory for secondary pages and assets
+            # Clean up previous 'html' dir if it exists to avoid stale files
+            # if self.secondary_html_pages_dir.exists():
+            #     logger.info(f"Cleaning up existing secondary report directory: {self.secondary_html_pages_dir}")
+            #     shutil.rmtree(self.secondary_html_pages_dir) # Deactivated for safety
+
+            self.secondary_html_pages_dir.mkdir(parents=True, exist_ok=True)
             self.report_img_dir.mkdir(exist_ok=True)
             self.report_data_dir.mkdir(exist_ok=True)
-            logger.info(f"HTML report will be generated in: {self.report_html_dir}")
+            logger.info(f"Main report file will be at: {self.main_report_file_path}")
+            logger.info(f"Secondary HTML pages and assets will be in: {self.secondary_html_pages_dir}")
+
         except Exception as e:
-            logger.error(f"Could not create report directory structure at {self.report_html_dir}: {e}")
-            raise # Re-raise to stop report generation if dir setup fails
+            logger.error(f"Could not create report directory structure under {self.output_dir_root}: {e}")
+            raise
 
     def _prepare_navigation(self):
         """Prepares the list of navigation items for the sidebar."""
         # This will be populated as we define sections
         self.report_data["navigation_items"] = [
-            {"id": "summary", "title": "Summary & Overview", "url": "index.html"},
-            {"id": "seq_metrics", "title": "Per-Sequence Metrics", "url": "sequence_metrics.html"},
-            {"id": "gene_agg", "title": "Per-Gene Aggregates", "url": "gene_aggregates.html"},
-            {"id": "rscu_plots", "title": "Per-Gene RSCU Plots", "url": "per_gene_rscu_plots.html"},
-            {"id": "stats_comp", "title": "Statistical Comparisons", "url": "statistical_comparisons.html"},
-            {"id": "combined_ca", "title": "Combined CA Results", "url": "combined_ca.html"},
-            {"id": "correlations", "title": "Correlation Heatmaps", "url": "correlations.html"},
-            # Placeholder for metadata plots link - will be added if metadata plots are generated
+            {"id": "summary", "title": "Summary & Overview", "url": "report.html"}, # Main page
+            {"id": "seq_metrics", "title": "Per-Sequence Metrics", "url": "html/sequence_metrics.html"},
+            {"id": "gene_agg", "title": "Per-Gene Aggregates", "url": "html/gene_aggregates.html"},
+            {"id": "rscu_plots", "title": "Per-Gene RSCU Plots", "url": "html/per_gene_rscu_plots.html"},
+            {"id": "stats_comp", "title": "Statistical Comparisons", "url": "html/statistical_comparisons.html"},
+            {"id": "combined_ca", "title": "Combined CA Results", "url": "html/combined_ca.html"},
+            {"id": "correlations", "title": "Correlation Heatmaps", "url": "html/correlations.html"},
         ]
-        # Store files to be generated
         self.pages_to_generate = [
-            {"template": "index_page_template.html", "output_file": "index.html", "page_id": "summary"},
-            {"template": "sequence_metrics_page_template.html", "output_file": "sequence_metrics.html", "page_id": "seq_metrics"},
-            {"template": "gene_aggregates_page_template.html", "output_file": "gene_aggregates.html", "page_id": "gene_agg"},
-            {"template": "per_gene_rscu_page_template.html", "output_file": "per_gene_rscu_plots.html", "page_id": "rscu_plots"},
-            {"template": "statistical_comparisons_page_template.html", "output_file": "statistical_comparisons.html", "page_id": "stats_comp"},            
-            {"template": "combined_ca_page_template.html", "output_file": "combined_ca.html", "page_id": "combined_ca"},
-            {"template": "correlation_heatmaps_page_template.html", "output_file": "correlations.html", "page_id": "correlations"},            
-            # More pages will be added here as templates are created
+            {"template": "index_page_template.html", "output_file": "report.html", "page_id": "summary", "depth": 0}, # Main page
+            {"template": "sequence_metrics_page_template.html", "output_file": "html/sequence_metrics.html", "page_id": "seq_metrics", "depth": 1},
+            {"template": "gene_aggregates_page_template.html", "output_file": "html/gene_aggregates.html", "page_id": "gene_agg", "depth": 1},
+            {"template": "per_gene_rscu_page_template.html", "output_file": "html/per_gene_rscu_plots.html", "page_id": "rscu_plots", "depth": 1},
+            {"template": "statistical_comparisons_page_template.html", "output_file": "html/statistical_comparisons.html", "page_id": "stats_comp", "depth": 1},
+            {"template": "combined_ca_page_template.html", "output_file": "html/combined_ca.html", "page_id": "combined_ca", "depth": 1},
+            {"template": "correlation_heatmaps_page_template.html", "output_file": "html/correlations.html", "page_id": "correlations", "depth": 1},
         ]
         # Placeholder for dynamic addition of metadata plots link
         # This will be updated in generate_report if metadata plots are active
@@ -163,19 +169,24 @@ class HTMLReportGenerator:
         if is_active and metadata_col_name:
             sanitized_metadata_col_name = utils.sanitize_filename(metadata_col_name) # Sanitize for display and URL
             self.report_data["navigation_items"].append(
-                {"id": page_id_to_check, 
-                 "title": f"Plots by '{sanitized_metadata_col_name}'", # Use sanitized name in title
-                 "url": "metadata_plots.html"} # Filename is generic
+                {"id": page_id_to_check,
+                 "title": f"Plots by '{sanitized_metadata_col_name}'",
+                 "url": "html/metadata_plots.html"} # Relative to output_dir_root
             )
             self.pages_to_generate.append(
-                {"template": "metadata_plots_page_template.html", 
-                 "output_file": "metadata_plots.html", # Generic output filename
-                 "page_id": page_id_to_check}
+                {"template": "metadata_plots_page_template.html",
+                 "output_file": "html/metadata_plots.html", # Placed in html/
+                 "page_id": page_id_to_check,
+                 "depth": 1} # Depth is 1 as it's in html/
             )
             logger.info(f"Added 'Plots by {sanitized_metadata_col_name}' to report navigation.")
 
 
-    def _copy_and_get_relative_path(self, plot_abs_path: Optional[str], plot_category: str, plot_name: str) -> Optional[str]:
+    def _copy_and_get_relative_path(self, 
+                                    plot_abs_path: Optional[str], 
+                                    plot_category: str, 
+                                    plot_name: str, 
+                                    current_page_depth: int) -> Optional[str]:
         """
         Copies a plot to the report's image directory and returns its relative path
         for use in HTML. Handles cases where the plot might not exist.
@@ -194,8 +205,11 @@ class HTMLReportGenerator:
             
             shutil.copy(src_path, dest_path_in_report_images)
             
-            relative_path_for_html = f"images/{dest_filename_in_images_dir}"
-            logger.debug(f"Copied plot '{src_path.name}' to '{dest_path_in_report_images}'. Relative HTML path: '{relative_path_for_html}'")
+            if current_page_depth == 0: # Page is at output_dir_root (report.html)
+                relative_path_for_html = f"html/images/{dest_filename_in_images_dir}"
+            else: # Page is inside output_dir_root/html/
+                relative_path_for_html = f"images/{dest_filename_in_images_dir}"
+                logger.debug(f"Copied plot '{src_path.name}' to '{dest_path_in_report_images}'. Relative HTML path: '{relative_path_for_html}'")
             return relative_path_for_html
         except Exception as e: # pragma: no cover
             logger.error(f"Could not copy plot {plot_abs_path} to report directory {self.report_img_dir}: {e}")
@@ -236,13 +250,20 @@ class HTMLReportGenerator:
                 self.report_data["tables"][f"{sane_table_key}_csv_path"] = None            
             
             if display_in_html:
-                self.report_data["tables"][f"{sane_table_key}_html"] = df_to_html_custom(df, table_id, classes, display_index=display_index)            
+                self.report_data["tables"][f"{sane_table_key}_html"] = df_to_html_custom(df, 
+                                                                                         table_id, 
+                                                                                         classes, 
+                                                                                         display_index=display_index)
             else:
-                # If not displaying, still ensure the key exists so templates don't break,
-                # or handle it in the template with a specific message.
+                link_path_placeholder = f"{self.secondary_html_pages_dir.name}/data/{csv_filename}" if self.report_data["tables"].get(f"{sane_table_key}_csv_filename") else "#"
+                display_link = f"data/{csv_filename}" # This is for pages inside html/ directory
+                
+                # The actual href construction needs to be smart based on page depth
+                # For now, provide the raw path and let template decide based on page_depth
                 self.report_data["tables"][f"{sane_table_key}_html"] = \
                     f"<p>Table '{table_name}' is intentionally not displayed here. See CSV for full data: " \
-                    f"<a href='data/{csv_filename}'>data/{csv_filename}</a></p>" if self.report_data["tables"].get(f"{sane_table_key}_csv_path") else \
+                    f"<a href='{display_link}' data-csv-filename='{csv_filename}'>data/{csv_filename}</a></p>" \
+                    if self.report_data["tables"].get(f"{sane_table_key}_csv_filename") else \
                     f"<p>Table '{table_name}' is intentionally not displayed here. CSV link unavailable.</p>"
             
         else:
@@ -250,29 +271,40 @@ class HTMLReportGenerator:
             self.report_data["tables"][f"{sane_table_key}_html"] = df_to_html_custom(None) # display_index n'est pas pertinent ici
             self.report_data["tables"][f"{sane_table_key}_csv_path"] = None
 
-    def add_plot(self, plot_key: str, plot_abs_path: Optional[str], 
-                 category: str = "combined_plots", 
-                 sub_category: Optional[str] = None, 
-                 sub_sub_category: Optional[str] = None,
-                 plot_dict_target: Optional[Dict[str, Any]] = None
+    def add_plot(self, plot_key: str, 
+                 plot_abs_path: Optional[str], 
+                 category: str = "combined_plots",
+                 plot_dict_target: Optional[Dict[str, Any]] = None,
+                 current_page_depth: int = 1 # Default to depth 1 (inside html/) for most plots
                 ):
         """
-        Adds a plot by copying it and storing its relative path.
-        If plot_dict_target is None, uses self.report_data["plot_paths"][category].
+        Adds a plot by copying it and storing its relative path, adjusted for page depth.
         """
-        rel_path = self._copy_and_get_relative_path(plot_abs_path, category, plot_key)
-        
-        # Use a placeholder if copy failed or path was None, and PLOT_NOT_AVAILABLE_PLACEHOLDER is defined and exists
-        # This part is simplified: if rel_path is None, the template should handle it.
-        # if rel_path is None and Path(self.report_img_dir / PLOT_NOT_AVAILABLE_PLACEHOLDER).exists():
-        #     rel_path = "images/" + PLOT_NOT_AVAILABLE_PLACEHOLDER
-        
+        copied_filename: Optional[str] = None
+        if plot_abs_path is not None and Path(plot_abs_path).is_file():
+            try:
+                src_path = Path(plot_abs_path)
+                dest_filename = src_path.name
+                # self.report_img_dir is output_root/html/images/
+                dest_path_in_report_img_dir = self.report_img_dir / dest_filename
+                shutil.copy(src_path, dest_path_in_report_img_dir)
+                copied_filename = dest_filename
+                logger.debug(f"Copied plot '{src_path.name}' to '{dest_path_in_report_img_dir}'.")
+            except Exception as e: # pragma: no cover
+                logger.error(f"Could not copy plot {plot_abs_path} to {self.report_img_dir}: {e}")
+        else:
+            logger.warning(f"Plot file not found or not specified for {category} - {plot_key}.")
+
+        # Path to be stored in report_data, always relative to output_dir_root
+        stored_path: Optional[str] = None
+        if copied_filename:
+            stored_path = f"{self.secondary_html_pages_dir.name}/images/{copied_filename}"
+            # e.g. "html/images/myplot.png"
+
         target_dict = plot_dict_target
         if target_dict is None:
             target_dict = self.report_data["plot_paths"].setdefault(category, {})
-        
-        target_dict[plot_key] = rel_path # Store None if plot is unavailable
-
+        target_dict[plot_key] = stored_path
 
     def generate_report(self):
         if not JINJA2_AVAILABLE: # pragma: no cover
@@ -280,31 +312,52 @@ class HTMLReportGenerator:
             return
 
         logger.info("Generating HTML report...")
-        self.report_img_dir.mkdir(parents=True, exist_ok=True)
-        self.report_data_dir.mkdir(parents=True, exist_ok=True)
-        
-        # This now correctly adds the nav item and page_to_generate if metadata was used
+        # Directories should already be created by _setup_report_directory
+        # self.secondary_html_pages_dir.mkdir(parents=True, exist_ok=True)
+        # self.report_img_dir.mkdir(parents=True, exist_ok=True)
+        # self.report_data_dir.mkdir(parents=True, exist_ok=True)
+
         if self.report_data.get("metadata_info", {}).get("column_used_for_coloring"):
             self._update_nav_for_metadata_plots(True, self.report_data["metadata_info"]["column_used_for_coloring"])
         else:
-            self._update_nav_for_metadata_plots(False) # Ensures it's removed if not active
+            self._update_nav_for_metadata_plots(False)
 
         for page_info in self.pages_to_generate:
             try:
                 template = self.env.get_template(page_info["template"])
-                # Pass the entire report_data, navigation_items, and active_page to all templates
+                
+                # Determine base path for relative links in this page
+                # This path is from the current HTML file to the output_dir_root
+                current_page_depth = page_info.get("depth", 0)
+                base_path_to_root = "../" * current_page_depth
+                self.report_data["base_path_to_root"] = base_path_to_root
+                
+                # Specific base path for assets (images, data) which are under "html/"
+                # If current page is at root (depth 0), path to assets is "html/"
+                # If current page is in "html/" (depth 1), path to assets is "" (already in correct relative scope)
+                self.report_data["base_path_to_html_assets"] = "html/" if current_page_depth == 0 else ""
+
+
                 html_content = template.render(
-                    report_data=self.report_data,
-                    navigation_items=self.report_data["navigation_items"],
-                    active_page=page_info["page_id"] 
+                    report_data=self.report_data, # Contains all data including plot paths relative to root
+                    navigation_items=self.report_data["navigation_items"], # URLs are relative to root
+                    active_page=page_info["page_id"]
                 )
-                with open(self.report_html_dir / page_info["output_file"], "w", encoding="utf-8") as f:
+                
+                # Determine full output path for the HTML file
+                # page_info["output_file"] is already "report.html" or "html/secondary.html"
+                full_output_path = self.output_dir_root / page_info["output_file"]
+                
+                # Ensure parent directory exists for secondary pages
+                full_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(full_output_path, "w", encoding="utf-8") as f:
                     f.write(html_content)
-                logger.info(f"Generated report page: {page_info['output_file']}")
+                logger.info(f"Generated report page: {full_output_path}")
             except TemplateNotFound: # pragma: no cover
                  logger.error(f"HTML template not found: {page_info['template']}. Skipping page '{page_info['output_file']}'.")
             except Exception as e: # pragma: no cover
                 logger.error(f"Error generating report page {page_info['output_file']} from template {page_info['template']}: {e}")
                 logger.debug(traceback.format_exc())
-        
-        logger.info(f"HTML report generation complete. Open '{self.report_html_dir / 'index.html'}' to view.")
+
+        logger.info(f"HTML report generation complete. Open '{self.main_report_file_path}' to view.")

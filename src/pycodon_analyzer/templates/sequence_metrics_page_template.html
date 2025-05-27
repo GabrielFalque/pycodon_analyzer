@@ -11,7 +11,7 @@
 
 <p>You can access the full CSV file here:
     {% if report_data.tables.per_sequence_metrics_csv_path %}
-        <a href="{{ report_data.tables.per_sequence_metrics_csv_path }}">{{ report_data.tables.per_sequence_metrics_csv_path }}</a>
+        <a href="{{ report_data.base_path_to_html_assets }}data/{{ report_data.tables.per_sequence_metrics_csv_path }}">{{ report_data.tables.per_sequence_metrics_csv_path }}</a>
     {% else %}
         <span class="unavailable">CSV file path not available.</span>
     {% endif %}

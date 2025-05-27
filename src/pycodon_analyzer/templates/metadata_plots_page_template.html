@@ -42,7 +42,7 @@
                 <div class="plot-container">
                     <h4>ENC vs GC3 Plot</h4>
                     {% if plots.enc_vs_gc3 %}
-                        <img src="{{ plots.enc_vs_gc3 }}" alt="ENC vs GC3 for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
+                        <img src="{{ report_data.base_path_to_root }}{{ plots.enc_vs_gc3 }}" alt="ENC vs GC3 for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
                     {% else %}
                         <p class="unavailable">Plot not available.</p>
                     {% endif %}
@@ -51,7 +51,7 @@
                 <div class="plot-container">
                     <h4>Neutrality Plot</h4>
                     {% if plots.neutrality %}
-                        <img src="{{ plots.neutrality }}" alt="Neutrality Plot for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
+                        <img src="{{ report_data.base_path_to_root }}{{ plots.neutrality }}" alt="Neutrality Plot for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
                     {% else %}
                         <p class="unavailable">Plot not available.</p>
                     {% endif %}
@@ -60,7 +60,7 @@
                 <div class="plot-container">
                     <h4>Correspondence Analysis (CA) Biplot</h4>
                     {% if plots.ca_biplot %}
-                        <img src="{{ plots.ca_biplot }}" alt="CA Biplot for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
+                        <img src="{{ report_data.base_path_to_root }}{{ plots.ca_biplot }}" alt="CA Biplot for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
                     {% else %}
                         <p class="unavailable">Plot not available.</p>
                     {% endif %}
@@ -69,7 +69,7 @@
                 <div class="plot-container">
                     <h4>Relative Dinucleotide Abundance</h4>
                     {% if plots.dinucl_abundance %}
-                        <img src="{{ plots.dinucl_abundance }}" alt="Dinucleotide Abundance for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
+                        <img src="{{ report_data.base_path_to_root }}{{ plots.dinucl_abundance }}" alt="Dinucleotide Abundance for {{ gene_name }} by {{ meta_col_name }}" class="zoomable">
                     {% else %}
                         <p class="unavailable">Plot not available.</p>
                     {% endif %}

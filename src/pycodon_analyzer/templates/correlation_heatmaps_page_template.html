@@ -15,7 +15,7 @@ The intensity and color of the cells represent the strength and direction of the
 <div class="plot-container">
     <h4>Correlation Between Calculated Sequence Metrics</h4>
     {% if report_data.plot_paths.combined_plots.feature_correlation_heatmap %}
-        <img src="{{ report_data.plot_paths.combined_plots.feature_correlation_heatmap }}" 
+        <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.feature_correlation_heatmap }}" 
              alt="Feature Correlation Heatmap" 
              class="zoomable">
     {% else %}
@@ -37,7 +37,7 @@ The intensity and color of the cells represent the strength and direction of the
 <div class="plot-container">
     <h4>Correlation of CA Axes with Sequence Features and RSCU Values</h4>
     {% if report_data.plot_paths.combined_plots.ca_axes_feature_corr %}
-        <img src="{{ report_data.plot_paths.combined_plots.ca_axes_feature_corr }}" 
+        <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.ca_axes_feature_corr }}" 
             alt="CA Axes vs Features Correlation Heatmap"
             class="zoomable">
     {% else %}

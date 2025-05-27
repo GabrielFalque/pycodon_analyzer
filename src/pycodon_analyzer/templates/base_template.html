@@ -223,7 +223,7 @@
         <nav>
             <ul>
                 {% for item in navigation_items %}
-                <li><a href="{{ item.url }}" {% if item.id == active_page %}class="active"{% endif %}>{{ item.title }}</a></li>
+                <li><a href="{{ report_data.base_path_to_root }}{{ item.url }}" {% if item.id == active_page %}class="active"{% endif %}>{{ item.title }}</a></li>
                 {% endfor %}
             </ul>
         </nav>
