@@ -138,6 +138,22 @@ ProcessGeneFileResultType = Tuple[
     Optional[Dict[str, Dict[str, float]]]   # per_sequence_dinucl_freqs (NEW)
 ]
 
+# ADDED to cli.py near the top, or within a utility section if you prefer
+
+def _ensure_output_subdirectories(output_dir_path: Path) -> None:
+    """
+    Creates the 'data' and 'images' subdirectories in the main output path if they don't exist.
+    The 'html' subdirectory for the report will be created by HTMLReportGenerator.
+    """
+    try:
+        (output_dir_path / "data").mkdir(parents=True, exist_ok=True)
+        (output_dir_path / "images").mkdir(parents=True, exist_ok=True)
+        logger.info(f"Ensured 'data' and 'images' subdirectories exist in '{output_dir_path}'.")
+    except OSError as e:
+        logger.error(f"Error creating output subdirectories 'data' or 'images' in '{output_dir_path}': {e}. Exiting.")
+        sys.exit(1)
+
+
 # --- Helper function to extract gene name from filename (with type hints) ---
 def extract_gene_name_from_file(filename: str) -> Optional[str]:
     """
@@ -365,31 +381,47 @@ def _run_gene_file_analysis_in_parallel(
     args: argparse.Namespace,
     reference_weights: Optional[Dict[str, float]],
     expected_gene_names: Set[str],
-    num_processes: int
-) -> List[Optional[AnalyzeGeneResultType]]:
+    num_processes: int,
+    output_dir_path: Path
+) -> List[Optional[AnalyzeGeneResultType]]: # Type alias might need update if ProcessGeneFileResultType changes
     """Runs process_analyze_gene_file in parallel or sequentially."""
-    processing_task = partial(process_analyze_gene_file, args=args, reference_weights=reference_weights, expected_gene_names=expected_gene_names)
-    results_raw: List[Optional[AnalyzeGeneResultType]] = []
+    processing_task = partial(process_analyze_gene_file, 
+                              args=args, 
+                              reference_weights=reference_weights, 
+                              expected_gene_names=expected_gene_names, 
+                              output_dir_path_for_plots=output_dir_path)
+    results_raw: List[Optional[AnalyzeGeneResultType]] = [] # Ensure this matches the return type of process_analyze_gene_file
 
-    progress_columns = [SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), TextColumn("({task.completed}/{task.total} genes)"), TimeElapsedColumn(), TextColumn("<"), TimeRemainingColumn()]
+    # ... (progress bar logic inchangée) ...
+    progress_columns = [SpinnerColumn(), 
+                        TextColumn("[progress.description]{task.description}"), 
+                        BarColumn(), 
+                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), 
+                        TextColumn("({task.completed}/{task.total} genes)"), 
+                        TimeElapsedColumn(), TextColumn("<"), 
+                        TimeRemainingColumn()]
     disable_rich = not sys.stderr.isatty() or not RICH_AVAILABLE
 
-    with Progress(*progress_columns, transient=False, disable=disable_rich) as progress:
-        analysis_task_id = progress.add_task("Analyzing Gene Files", total=len(gene_files))
+    with Progress(*progress_columns, 
+                  transient=False, 
+                  disable=disable_rich) as progress:
+        analysis_task_id = progress.add_task("Analyzing Gene Files", 
+                                             total=len(gene_files))
         if num_processes > 1 and MP_AVAILABLE:
             try:
                 with mp.Pool(processes=num_processes) as pool:
-                    for result in pool.imap(processing_task, gene_files):
+                    for result in pool.imap(processing_task, 
+                                            gene_files): # type: ignore
                         results_raw.append(result)
                         progress.update(analysis_task_id, advance=1)
-            except Exception as pool_err:
+            except Exception as pool_err: # pragma: no cover
                 logger.exception(f"Parallel analysis error: {pool_err}. No results collected from parallel run.")
-                results_raw = [None] * len(gene_files) # Ensure list of correct size with failures
+                results_raw = [None] * len(gene_files)
         else:
             for gene_file in gene_files:
-                results_raw.append(processing_task(gene_file))
+                results_raw.append(processing_task(gene_file)) # type: ignore
                 progress.update(analysis_task_id, advance=1)
-    return results_raw
+    return results_raw # type: ignore
 
 def _collect_and_aggregate_results(
     analyze_results_raw: List[Optional[ProcessGeneFileResultType]],
@@ -468,15 +500,12 @@ def _analyze_complete_sequences_cli(
     sequences_by_original_id: Dict[str, Dict[str, Seq]],
     successfully_processed_genes: Set[str],
     args: argparse.Namespace,
-    reference_weights: Optional[Dict[str, float]]
-) -> Tuple[ # Update return tuple to match FullAnalysisResultType structure for "complete"
-    Optional[pd.DataFrame],                 # agg_usage_df_complete
-    Optional[pd.DataFrame],                 # per_sequence_df_complete
-    Optional[Dict[str, float]],             # nucl_freqs_complete_agg
-    Optional[Dict[str, float]],             # dinucl_freqs_complete_agg
-    Optional[Dict[str, Dict[str, float]]],  # per_seq_nucl_freqs_complete
-    Optional[Dict[str, Dict[str, float]]],  # per_seq_dinucl_freqs_complete
-    Optional[pd.DataFrame]                  # ca_input_df_complete_plot
+    reference_weights: Optional[Dict[str, float]],
+    output_dir_path: Path
+) -> Tuple[
+    Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[Dict[str, float]],
+    Optional[Dict[str, float]], Optional[Dict[str, Dict[str, float]]],
+    Optional[Dict[str, Dict[str, float]]], Optional[pd.DataFrame]
 ]:
     logger.info("Analyzing concatenated 'complete' sequences...")
     complete_seq_records: List[SeqRecord] = []
@@ -490,8 +519,10 @@ def _analyze_complete_sequences_cli(
                     n_count, seq_len = concat_str.count('N'), len(concat_str)
                     ambiguity = (n_count / seq_len) * 100 if seq_len > 0 else 0
                     if ambiguity <= max_ambiguity_pct_complete:
-                        complete_seq_records.append(SeqRecord(Seq(concat_str), id=original_id, description=f"Concatenated {len(gene_seq_map)} genes"))
-            except Exception as e:
+                        complete_seq_records.append(SeqRecord(Seq(concat_str), 
+                                                              id=original_id, 
+                                                              description=f"Concatenated {len(gene_seq_map)} genes"))
+            except Exception as e: # pragma: no cover
                 logger.warning(f"Error concatenating sequence for ID {original_id}: {e}")
 
 
@@ -504,12 +535,44 @@ def _analyze_complete_sequences_cli(
         res_comp: FullAnalysisResultType = analysis.run_full_analysis(
             complete_seq_records, args.genetic_code, reference_weights
         )
-        # Unpack all parts including per-sequence frequencies
-        return (res_comp[0], res_comp[1], res_comp[2], res_comp[3], 
-                res_comp[4], res_comp[5], res_comp[8]) # Indices match FullAnalysisResultType
-    except Exception as e:
+        agg_usage_df_complete, per_seq_df_complete, nucl_freqs_complete_agg, \
+        dinucl_freqs_complete_agg, per_seq_nucl_freqs_complete, \
+        per_seq_dinucl_freqs_complete, _, _, ca_input_df_complete_plot = res_comp
+
+        # Save RSCU boxplot for "complete" set
+        if not args.skip_plots and agg_usage_df_complete is not None and not agg_usage_df_complete.empty and \
+           ca_input_df_complete_plot is not None and not ca_input_df_complete_plot.empty:
+            logger.info("Generating RSCU boxplot for 'complete' data...")
+            try:
+                long_rscu_df_comp = ca_input_df_complete_plot.reset_index().rename(
+                    columns={'index': 'SequenceID'}
+                )
+                long_rscu_df_comp = long_rscu_df_comp.melt(id_vars=['SequenceID'],
+                                                           var_name='Codon',
+                                                           value_name='RSCU')
+                current_gc_dict = utils.get_genetic_code(args.genetic_code)
+                long_rscu_df_comp['AminoAcid'] = long_rscu_df_comp['Codon'].map(current_gc_dict.get)
+                for fmt in args.plot_formats:
+                    plot_filename = f"RSCU_boxplot_complete.{fmt}"
+                    rscu_boxplot_complete_filepath = output_dir_path / "images" / plot_filename
+                    plotting.plot_rscu_boxplot_per_gene(
+                        long_rscu_df_comp,
+                        agg_usage_df_complete,
+                        'complete', # gene_name for title
+                        str(rscu_boxplot_complete_filepath) # Full save path
+                    )
+            except Exception as e: # pragma: no cover
+                logger.error(f"Failed to generate 'complete' RSCU boxplot: {e}")
+        elif not args.skip_plots: # pragma: no cover
+             logger.warning("Cannot generate 'complete' RSCU boxplot due to missing aggregate usage data for complete set.")
+
+        return (agg_usage_df_complete, per_seq_df_complete, nucl_freqs_complete_agg,
+                dinucl_freqs_complete_agg, per_seq_nucl_freqs_complete,
+                per_seq_dinucl_freqs_complete, ca_input_df_complete_plot)
+    except Exception as e: # pragma: no cover
         logger.exception(f"Error during 'complete' sequence analysis: {e}")
         return None, None, None, None, None, None, None
+
 
 def _update_aggregate_data_with_complete_results(
     complete_results_tuple: Tuple[ # Matches return of _analyze_complete_sequences_cli
@@ -575,17 +638,20 @@ def _update_aggregate_data_with_complete_results(
              logger.warning("Cannot generate 'complete' RSCU boxplot due to missing aggregate usage data for complete set.")
 
 def _finalize_and_save_per_sequence_metrics(all_per_sequence_dfs: List[pd.DataFrame], output_dir_path: Path) -> Optional[pd.DataFrame]:
-    """Combines and saves the per-sequence metrics from all genes and the 'complete' set."""
+    """Combines and saves the per-sequence metrics to output_dir_path / "data"."""
     if not all_per_sequence_dfs:
         logger.error("No per-sequence results collected. Cannot save combined metrics.")
         return None
     try:
         combined_df = pd.concat(all_per_sequence_dfs, ignore_index=True)
-        filepath = output_dir_path / "per_sequence_metrics_all_genes.csv"
+        # MODIFIED: Save to data subdirectory
+        data_subdir = output_dir_path / "data"
+        # data_subdir.mkdir(parents=True, exist_ok=True) # Already created by _ensure_output_subdirectories
+        filepath = data_subdir / "per_sequence_metrics_all_genes.csv"
         combined_df.to_csv(filepath, index=False, float_format='%.5f')
         logger.info(f"Combined per-sequence metrics saved: {filepath}")
         return combined_df
-    except Exception as e:
+    except Exception as e: # pragma: no cover
         logger.exception(f"Error concatenating/saving per-sequence results: {e}")
         return None
 
@@ -639,10 +705,9 @@ def _generate_summary_tables_and_stats(
 
 def _perform_and_save_combined_ca(
     all_ca_input_dfs: Dict[str, pd.DataFrame],
-    output_dir_path: Path,
-    args: argparse.Namespace # For skip_ca and ca_dims
+    output_dir_path: Path, # Main output directory
+    args: argparse.Namespace
 ) -> Tuple[Optional[pd.DataFrame], Optional[PrinceCA], Optional[pd.Series], Optional[pd.DataFrame]]:
-    """Performs combined CA and saves detailed CA results."""
     if args.skip_ca:
         logger.info("Skipping combined Correspondence Analysis as requested.")
         return None, None, None, None
@@ -655,76 +720,70 @@ def _perform_and_save_combined_ca(
     ca_results_combined: Optional[PrinceCA] = None # type: ignore
     gene_groups_for_plotting: Optional[pd.Series] = None
     ca_row_coords_df: Optional[pd.DataFrame] = None
+    data_subdir = output_dir_path / "data" # Define data subdirectory path
+    # data_subdir.mkdir(parents=True, exist_ok=True) # Already created by _ensure_output_subdirectories
 
     try:
-        combined_ca_input_df = pd.concat(all_ca_input_dfs.values()) # Ensure all_ca_input_dfs contains valid DataFrames
-        
+        combined_ca_input_df = pd.concat(all_ca_input_dfs.values())
         if combined_ca_input_df.empty:
             logger.warning("Combined CA input DataFrame is empty before cleaning. Skipping CA.")
             return None, None, None, None
-
-        # Initial cleaning in cli.py (good as a first pass)
         logger.debug(f"Shape of combined_ca_input_df before CLI cleaning: {combined_ca_input_df.shape}")
         for col in combined_ca_input_df.columns:
-            combined_ca_input_df[col] = pd.to_numeric(combined_ca_input_df[col], errors='coerce')
+            combined_ca_input_df[col] = pd.to_numeric(combined_ca_input_df[col], 
+                                                      errors='coerce')
         combined_ca_input_df.fillna(0.0, inplace=True)
         combined_ca_input_df.replace([np.inf, -np.inf], 0.0, inplace=True)
         logger.debug(f"Shape of combined_ca_input_df after CLI cleaning: {combined_ca_input_df.shape}")
 
-
-
-        # Explicitly convert to float, handle conversion errors, then replace inf/nan
         if not combined_ca_input_df.empty:
-            for col in combined_ca_input_df.columns:
-                combined_ca_input_df[col] = pd.to_numeric(combined_ca_input_df[col], errors='coerce')
-            combined_ca_input_df.fillna(0.0, inplace=True)
-            combined_ca_input_df.replace([np.inf, -np.inf], 0.0, inplace=True)
-
-        if not combined_ca_input_df.empty:
-            group_data = combined_ca_input_df.index.str.split('__', n=1, expand=True)
-            
-            # Ensure group_data has at least one level before trying to access it
-            if group_data.nlevels > 0:
-                gene_groups_for_plotting = pd.Series(data=group_data.get_level_values(0), index=combined_ca_input_df.index, name='Gene')
-            else: # Should not happen if index format is correct
-                logger.warning("Could not parse gene groups from CA input index. Grouping for plots might be affected.")
-                gene_groups_for_plotting = None
-
-            # Ensure group_data logic is robust
             split_idx = combined_ca_input_df.index.str.split('__', n=1, expand=True)
-            if split_idx.nlevels > 0 and not split_idx.empty: # Check if split produced levels
-                 gene_groups_for_plotting = pd.Series(data=split_idx.get_level_values(0), index=combined_ca_input_df.index, name='Gene')
-            else:
+            if split_idx.nlevels > 0 and not split_idx.empty:
+                 gene_groups_for_plotting = pd.Series(data=split_idx.get_level_values(0), 
+                                                      index=combined_ca_input_df.index, 
+                                                      name='Gene')
+            else: # pragma: no cover
                  logger.warning("Could not reliably parse gene groups from CA input DataFrame index for plotting.")
                  gene_groups_for_plotting = None
 
             ca_results_combined = analysis.perform_ca(combined_ca_input_df.copy())
-            
+
             if ca_results_combined:
                 logger.info("Combined CA complete. Saving details...")
                 ca_row_coords_df = ca_results_combined.row_coordinates(combined_ca_input_df)
-                ca_row_coords_df.to_csv(output_dir_path / "ca_row_coordinates.csv", float_format='%.5f')
-                ca_results_combined.column_coordinates(combined_ca_input_df).to_csv(output_dir_path / "ca_col_coordinates.csv", float_format='%.5f')
-                if hasattr(ca_results_combined, 'column_contributions_'):
-                    ca_results_combined.column_contributions_.to_csv(output_dir_path / "ca_col_contributions.csv", float_format='%.5f')
-                if hasattr(ca_results_combined, 'eigenvalues_summary'):
-                    ca_results_combined.eigenvalues_summary.to_csv(output_dir_path / "ca_eigenvalues.csv", float_format='%.5f')
-                
-                # Save per-sequence RSCU wide format
-                rscu_wide_path = output_dir_path / "per_sequence_rscu_wide.csv"
+
+                # Save to data_subdir
+                ca_row_coords_df.to_csv(data_subdir / "ca_row_coordinates.csv", 
+                                        float_format='%.5f')
+                ca_results_combined.column_coordinates(
+                    combined_ca_input_df
+                ).to_csv(
+                    data_subdir / "ca_col_coordinates.csv", 
+                    float_format='%.5f'
+                )
+                if hasattr(ca_results_combined, 
+                           'column_contributions_'):
+                    ca_results_combined.column_contributions_.to_csv(data_subdir / "ca_col_contributions.csv", float_format='%.5f')
+                if hasattr(ca_results_combined, 
+                           'eigenvalues_summary'):
+                    ca_results_combined.eigenvalues_summary.to_csv(data_subdir / "ca_eigenvalues.csv", float_format='%.5f')
+
+                rscu_wide_path = data_subdir / "per_sequence_rscu_wide.csv"
                 combined_ca_input_df.to_csv(rscu_wide_path, float_format='%.4f')
                 logger.info(f"Per-sequence RSCU (wide) saved: {rscu_wide_path}")
-            else:
+            else: # pragma: no cover
                 logger.warning("Combined CA fitting failed or produced no result.")
-                combined_ca_input_df = None # Reset if CA failed
-        else:
+                combined_ca_input_df = None
+        else: # pragma: no cover
             logger.warning("Combined CA input data is empty. Skipping CA.")
             combined_ca_input_df = None
-    except Exception as e:
+    except Exception as e: # pragma: no cover
         logger.exception(f"Error during combined CA: {e}")
         combined_ca_input_df, ca_results_combined, gene_groups_for_plotting, ca_row_coords_df = None, None, None, None
-    
-    return combined_ca_input_df, ca_results_combined, gene_groups_for_plotting, ca_row_coords_df
+
+    return combined_ca_input_df, ca_results_combined, \
+        gene_groups_for_plotting, ca_row_coords_df
+
 
 def _generate_color_palette_for_groups(combined_per_sequence_df: Optional[pd.DataFrame]) -> Optional[Dict[str, Any]]:
     """Generates a color palette for unique gene groups."""
@@ -753,123 +812,112 @@ def _generate_plots_per_gene_colored_by_metadata(
     args: argparse.Namespace,
     combined_per_sequence_df_with_meta: pd.DataFrame,
     all_ca_input_dfs: Dict[str, pd.DataFrame],
-    all_nucl_freqs_per_seq_in_gene: Dict[str, Dict[str, Dict[str, float]]], 
+    all_nucl_freqs_per_seq_in_gene: Dict[str, Dict[str, Dict[str, float]]],
     all_dinucl_freqs_per_seq_in_gene: Dict[str, Dict[str, Dict[str, float]]],
     metadata_col_for_color: str,
-    top_n_categories_map: Dict[str, str], # Maps original category to itself or "Other"
-    output_base_dir: Path,
+    top_n_categories_map: Dict[str, str],
+    output_dir_path: Path, # This is the main output directory (e.g., codon_analysis_results)
     gene_color_map_for_metadata: Optional[Dict[str, Any]]
 ):
     logger.info(f"Generating per-gene plots colored by metadata column '{metadata_col_for_color}'...")
-    metadata_plot_base_dir = output_base_dir / f"{utils.sanitize_filename(metadata_col_for_color)}_per_gene_plots"
-    metadata_plot_base_dir.mkdir(parents=True, exist_ok=True)
+    # Base directory for these specific plots, under the main "images" directory
+    metadata_plots_image_base_dir = output_dir_path / "images" / f"{utils.sanitize_filename(metadata_col_for_color)}_per_gene_plots"
+    # metadata_plots_image_base_dir.mkdir(parents=True, exist_ok=True) # Plotting functions will create if needed
 
-    plot_hue_col = f"{metadata_col_for_color}_topN" # The column with mapped categories (top N or "Other")
+    plot_hue_col = f"{metadata_col_for_color}_topN"
     if metadata_col_for_color in combined_per_sequence_df_with_meta:
-        # Ensure this column exists after mapping
         if plot_hue_col not in combined_per_sequence_df_with_meta.columns:
              combined_per_sequence_df_with_meta[plot_hue_col] = combined_per_sequence_df_with_meta[metadata_col_for_color].astype(str).map(top_n_categories_map)
-    else:
+    else: # pragma: no cover
         logger.error(f"Metadata column '{metadata_col_for_color}' not found for hue mapping. Skipping per-gene metadata plots.")
         return
-
     unique_genes = combined_per_sequence_df_with_meta['Gene'].unique()
 
-    for gene_name in unique_genes:
-        gene_plot_dir = metadata_plot_base_dir / utils.sanitize_filename(gene_name)
-        gene_plot_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"  Processing gene '{gene_name}' for metadata-colored plots...")
 
-        # Filter combined_per_sequence_df_with_meta for the current gene
-        # Its index is default numeric. 'ID' column is GENE__SEQID, 'Original_ID' is SEQID
+    for gene_name in unique_genes:
+        # Full path to the directory for this gene's metadata-colored plots
+        gene_specific_metadata_plots_dir_abs = metadata_plots_image_base_dir / utils.sanitize_filename(gene_name)
+        # gene_specific_metadata_plots_dir_abs.mkdir(parents=True, exist_ok=True) # Plotting functions will create
+
+        logger.info(f"  Processing gene '{gene_name}' for metadata-colored plots (output to: {gene_specific_metadata_plots_dir_abs})")
         gene_specific_metrics_meta_df = combined_per_sequence_df_with_meta[
             combined_per_sequence_df_with_meta['Gene'] == gene_name
         ].copy()
-
-        if gene_specific_metrics_meta_df.empty:
+        if gene_specific_metrics_meta_df.empty: # pragma: no cover
             logger.warning(f"No metric data for gene '{gene_name}' with metadata. Skipping plots for this gene.")
             continue
-        
-        # Ensure the hue column (plot_hue_col) is available in gene_specific_metrics_meta_df
-        if plot_hue_col not in gene_specific_metrics_meta_df.columns:
+        if plot_hue_col not in gene_specific_metrics_meta_df.columns: # pragma: no cover
             logger.error(f"Plot hue column '{plot_hue_col}' is missing from data for gene '{gene_name}'. Skipping plots.")
             continue
 
-
-        # --- Plotting ENC vs GC3 & Neutrality (uses gene_specific_metrics_meta_df) ---
         plot_title_prefix = f"Gene {gene_name}: "
         filename_suffix_for_gene = f"_{utils.sanitize_filename(gene_name)}_by_{utils.sanitize_filename(metadata_col_for_color)}"
+
         if not args.skip_plots:
             for fmt in args.plot_formats:
+                # Construct full output filepaths for each plot
+                enc_plot_filepath = gene_specific_metadata_plots_dir_abs / f"enc_vs_gc3_plot{filename_suffix_for_gene}.{fmt}"
                 plotting.plot_enc_vs_gc3(
                     per_sequence_df=gene_specific_metrics_meta_df,
-                    output_dir=str(gene_plot_dir), file_format=fmt,
+                    output_filepath=str(enc_plot_filepath), # Pass full path
+                    # output_dir and file_format are removed from plotting function
                     group_by_col=plot_hue_col, palette=gene_color_map_for_metadata,
-                    filename_suffix=filename_suffix_for_gene, plot_title_prefix=plot_title_prefix
+                    # filename_suffix and plot_title_prefix are for internal use by plotting fn if it constructs its own titles/names
+                    # but since we pass full path, they might be less critical for the plotting fn itself.
+                    # However, keeping them allows the plotting function to still generate consistent titles.
+                    filename_suffix=filename_suffix_for_gene, # Keep for title consistency
+                    plot_title_prefix=plot_title_prefix
                 )
+                neutrality_plot_filepath = gene_specific_metadata_plots_dir_abs / f"neutrality_plot{filename_suffix_for_gene}.{fmt}"
                 plotting.plot_neutrality(
                     per_sequence_df=gene_specific_metrics_meta_df,
-                    output_dir=str(gene_plot_dir), file_format=fmt,
+                    output_filepath=str(neutrality_plot_filepath),
                     group_by_col=plot_hue_col, palette=gene_color_map_for_metadata,
                     filename_suffix=filename_suffix_for_gene, plot_title_prefix=plot_title_prefix
                 )
 
-        # --- Per-Gene CA Plot (colored by metadata) ---
-        # rscu_df_for_gene has index GENE__SEQID (e.g., S__SeqA)
         rscu_df_for_gene: Optional[pd.DataFrame] = all_ca_input_dfs.get(gene_name)
         if not args.skip_ca and rscu_df_for_gene is not None and not rscu_df_for_gene.empty:
-            # We need to align rscu_df_for_gene with gene_specific_metrics_meta_df
-            # gene_specific_metrics_meta_df has 'ID' column as GENE__SEQID
-            # Create a Series for hueing, indexed like rscu_df_for_gene
-            
-            # Make 'ID' the index for easy alignment if not already
-            temp_metrics_for_hue = gene_specific_metrics_meta_df.set_index('ID', drop=False) # drop=False to keep 'ID' if needed
-            
+            temp_metrics_for_hue = gene_specific_metrics_meta_df.set_index('ID', drop=False)
             common_indices_ca = rscu_df_for_gene.index.intersection(temp_metrics_for_hue.index)
-            
+
             if not common_indices_ca.empty:
                 rscu_df_for_ca_plot = rscu_df_for_gene.loc[common_indices_ca]
                 hue_series_for_ca = temp_metrics_for_hue.loc[common_indices_ca, plot_hue_col]
 
-                if not rscu_df_for_ca_plot.empty and rscu_df_for_ca_plot.shape[0] >=2 and rscu_df_for_ca_plot.shape[1] >=2 :
-                    ca_results_gene = analysis.perform_ca(rscu_df_for_ca_plot)
+                if not rscu_df_for_ca_plot.empty and rscu_df_for_ca_plot.shape[0] >=2 and rscu_df_for_ca_plot.shape[1] >=2 : # type: ignore
+                    ca_results_gene = analysis.perform_ca(rscu_df_for_ca_plot) # type: ignore
                     if ca_results_gene:
                         for fmt in args.plot_formats:
+                            # Construct full output filepath for CA plot
+                            ca_plot_filename = f"ca_biplot_comp{args.ca_dims[0]+1}v{args.ca_dims[1]+1}{filename_suffix_for_gene}.{fmt}"
+                            ca_plot_filepath = gene_specific_metadata_plots_dir_abs / ca_plot_filename
                             plotting.plot_ca(
-                                ca_results=ca_results_gene, ca_input_df=rscu_df_for_ca_plot,
-                                output_dir=str(gene_plot_dir), file_format=fmt,
+                                ca_results=ca_results_gene, ca_input_df=rscu_df_for_ca_plot, # type: ignore
+                                output_filepath=str(ca_plot_filepath), # Pass full path
                                 comp_x=args.ca_dims[0], comp_y=args.ca_dims[1],
                                 groups=hue_series_for_ca, palette=gene_color_map_for_metadata,
                                 filename_suffix=filename_suffix_for_gene, plot_title_prefix=plot_title_prefix
                             )
-                else:
-                    logger.warning(f"Not enough data for CA for gene '{gene_name}' after filtering for metadata plot ({rscu_df_for_ca_plot.shape}).")
-            else:
+                else: # pragma: no cover
+                    logger.warning(f"Not enough data for CA for gene '{gene_name}' after filtering for metadata plot ({rscu_df_for_ca_plot.shape if rscu_df_for_ca_plot is not None else 'None'}).") # type: ignore
+            else: # pragma: no cover
                  logger.warning(f"No common sequences between RSCU data and metrics for CA plot of gene '{gene_name}'.")
 
-        # --- Per-Gene Dinucleotide Abundance Plot (colored by metadata) ---
+
         nucl_freqs_per_seq_this_gene = all_nucl_freqs_per_seq_in_gene.get(gene_name)
         dinucl_freqs_per_seq_this_gene = all_dinucl_freqs_per_seq_in_gene.get(gene_name)
-
         if not args.skip_plots and nucl_freqs_per_seq_this_gene and dinucl_freqs_per_seq_this_gene:
             per_sequence_oe_ratios_list = []
-            # gene_specific_metrics_meta_df has 'Original_ID' and plot_hue_col
-            # We need to iterate through its sequences to get Original_ID and metadata category
-            
             for original_seq_id_for_dinucl in gene_specific_metrics_meta_df['Original_ID'].unique():
-                # Get this sequence's specific metrics/metadata row
                 seq_meta_row = gene_specific_metrics_meta_df[
                     gene_specific_metrics_meta_df['Original_ID'] == original_seq_id_for_dinucl
-                ].iloc[0] # Assuming Original_ID is unique within a gene's subset here
-                
+                ].iloc[0]
                 metadata_category = seq_meta_row[plot_hue_col]
-                
-                nucl_freqs_s = nucl_freqs_per_seq_this_gene.get(str(original_seq_id_for_dinucl)) # Ensure key is string
+                nucl_freqs_s = nucl_freqs_per_seq_this_gene.get(str(original_seq_id_for_dinucl))
                 dinucl_freqs_s = dinucl_freqs_per_seq_this_gene.get(str(original_seq_id_for_dinucl))
-
                 if nucl_freqs_s and dinucl_freqs_s:
-                    oe_ratios_seq = analysis.calculate_relative_dinucleotide_abundance(nucl_freqs_s, 
-                                                                                       dinucl_freqs_s)
+                    oe_ratios_seq = analysis.calculate_relative_dinucleotide_abundance(nucl_freqs_s, dinucl_freqs_s)
                     for dinucl, ratio in oe_ratios_seq.items():
                         per_sequence_oe_ratios_list.append({
                             'SequenceID': original_seq_id_for_dinucl,
@@ -877,22 +925,23 @@ def _generate_plots_per_gene_colored_by_metadata(
                             'RelativeAbundance': ratio,
                             plot_hue_col: metadata_category
                         })
-            
             if per_sequence_oe_ratios_list:
                 per_sequence_oe_ratios_df = pd.DataFrame(per_sequence_oe_ratios_list)
                 for fmt in args.plot_formats:
+                    # Construct full output filepath
+                    dinucl_plot_filename = f"dinucl_abundance{filename_suffix_for_gene}.{fmt}"
+                    dinucl_plot_filepath = gene_specific_metadata_plots_dir_abs / dinucl_plot_filename
                     plotting.plot_per_gene_dinucleotide_abundance_by_metadata(
                         per_sequence_oe_ratios_df=per_sequence_oe_ratios_df,
                         metadata_hue_col=plot_hue_col,
-                        output_dir=str(gene_plot_dir),
-                        file_format=fmt,
+                        output_filepath=str(dinucl_plot_filepath), # Pass full path
                         palette=gene_color_map_for_metadata,
-                        gene_name=gene_name, # Pass gene_name for title
-                        filename_suffix_extra=filename_suffix_for_gene # Consistent naming
+                        gene_name=gene_name,
+                        filename_suffix_extra=filename_suffix_for_gene # Keep for title consistency
                     )
-            else:
+            else: # pragma: no cover
                 logger.warning(f"No per-sequence O/E ratios calculated for dinucleotide plot of gene '{gene_name}'.")
-        elif not args.skip_plots:
+        elif not args.skip_plots: # pragma: no cover
             logger.info(f"Skipping per-sequence dinucleotide plot for gene '{gene_name}' due to missing per-sequence frequency data.")
 
 def _generate_all_combined_plots(
@@ -900,19 +949,22 @@ def _generate_all_combined_plots(
     combined_per_sequence_df: Optional[pd.DataFrame],
     gene_color_map: Optional[Dict[str, Any]],
     rel_abund_df: pd.DataFrame,
-    ca_results_combined: Optional[PrinceCA],
-    combined_ca_input_df: Optional[pd.DataFrame], # This is the RSCU wide format data
+    ca_results_combined: Optional[PrinceCA], # type: ignore
+    combined_ca_input_df: Optional[pd.DataFrame],
     gene_groups_for_plotting: Optional[pd.Series],
-    ca_row_coords: Optional[pd.DataFrame], # Output of ca_results.row_coordinates()
-    reference_data_for_plot: Optional[pd.DataFrame] # For RSCU comparison plot
+    ca_row_coords: Optional[pd.DataFrame],
+    reference_data_for_plot: Optional[pd.DataFrame],
+    output_dir_path: Path # Main output directory
 ) -> None:
-    """Generates all combined plots."""
     if args.skip_plots:
         logger.info("Skipping combined plot generation as requested.")
         return
 
     logger.info("Generating combined plots...")
-    output_dir_path = Path(args.output)
+    # Base directory for combined images
+    output_images_dir_abs = output_dir_path / "images"
+    # output_images_dir_abs.mkdir(parents=True, exist_ok=True) # Plotting functions will handle parent dir creation
+
     plot_formats = args.plot_formats
     n_ca_dims_variance, n_ca_contrib_top = 10, 10
 
@@ -920,108 +972,123 @@ def _generate_all_combined_plots(
         logger.debug(f"Generating combined plots in format: {fmt}")
         try:
             if combined_per_sequence_df is not None:
-                plotting.plot_gc_means_barplot(combined_per_sequence_df, str(output_dir_path), fmt, 'Gene')
-                plotting.plot_enc_vs_gc3(combined_per_sequence_df, 
-                                         output_dir=str(output_dir_path), 
-                                         file_format=fmt, 
-                                         group_by_col='Gene', 
-                                         palette=gene_color_map,
+                # Construct full filepaths
+                gc_means_filename = f"gc_means_barplot_by_Gene.{fmt}"
+                plotting.plot_gc_means_barplot(combined_per_sequence_df, str(output_images_dir_abs / gc_means_filename), 'Gene')
+
+                enc_gc3_filename = f"enc_vs_gc3_plot_{utils.sanitize_filename('_grouped_by_gene')}.{fmt}"
+                plotting.plot_enc_vs_gc3(combined_per_sequence_df,
+                                         output_filepath=str(output_images_dir_abs / enc_gc3_filename),
+                                         group_by_col='Gene', palette=gene_color_map,
                                          filename_suffix="_grouped_by_gene")
-                plotting.plot_neutrality(combined_per_sequence_df, 
-                                         output_dir=str(output_dir_path), 
-                                         file_format=fmt, 
-                                         group_by_col='Gene', 
-                                         palette=gene_color_map,
+
+                neutrality_filename = f"neutrality_plot_{utils.sanitize_filename('_grouped_by_gene')}.{fmt}"
+                plotting.plot_neutrality(combined_per_sequence_df,
+                                         output_filepath=str(output_images_dir_abs / neutrality_filename),
+                                         group_by_col='Gene', palette=gene_color_map,
                                          filename_suffix="_grouped_by_gene")
 
                 features_for_corr = ['GC', 'GC1', 'GC2', 'GC3', 'GC12', 'ENC', 'CAI', 'RCDI', 'Aromaticity', 'GRAVY', 'Length', 'TotalCodons']
                 available_corr_feat = [f for f in features_for_corr if f in combined_per_sequence_df.columns]
+                
                 if len(available_corr_feat) > 1:
-                    plotting.plot_correlation_heatmap(combined_per_sequence_df, available_corr_feat, str(output_dir_path), fmt)
-            
+                    corr_heatmap_filename = f"feature_correlation_heatmap_spearman.{fmt}"
+                    plotting.plot_correlation_heatmap(combined_per_sequence_df, available_corr_feat, str(output_images_dir_abs / corr_heatmap_filename))
+
             if not rel_abund_df.empty:
-                plotting.plot_relative_dinucleotide_abundance(rel_abund_df, str(output_dir_path), fmt, palette=gene_color_map)
+                rel_dinucl_filename = f"relative_dinucleotide_abundance.{fmt}"
+                plotting.plot_relative_dinucleotide_abundance(rel_abund_df, str(output_images_dir_abs / rel_dinucl_filename), palette=gene_color_map) # type: ignore
 
             if ca_results_combined and combined_ca_input_df is not None:
-                plotting.plot_ca(ca_results_combined, combined_ca_input_df, str(output_dir_path), fmt,
+                ca_suffix = utils.sanitize_filename('_combined_by_gene')
+                ca_biplot_filename = f"ca_biplot_comp{args.ca_dims[0]+1}v{args.ca_dims[1]+1}_{ca_suffix}.{fmt}"
+                plotting.plot_ca(ca_results_combined, combined_ca_input_df, str(output_images_dir_abs / ca_biplot_filename),
                                 args.ca_dims[0], args.ca_dims[1], groups=gene_groups_for_plotting,
-                                palette=gene_color_map, filename_suffix="_combined_by_gene")
-                plotting.plot_ca_variance(ca_results_combined, n_ca_dims_variance, str(output_dir_path), fmt)
+                                palette=gene_color_map, filename_suffix="_combined_by_gene") # type: ignore
+
+                ca_var_filename = f"ca_variance_explained_top{n_ca_dims_variance}.{fmt}"
+                plotting.plot_ca_variance(ca_results_combined, n_ca_dims_variance, 
+                                          str(output_images_dir_abs / ca_var_filename)) # type: ignore
+                
                 if hasattr(ca_results_combined, 'column_contributions_'):
+                    
                     if ca_results_combined.column_contributions_.shape[1] > 0:
-                         plotting.plot_ca_contribution(ca_results_combined, 0, n_ca_contrib_top, str(output_dir_path), fmt)
+                         ca_contrib1_filename = f"ca_contribution_dim1_top{n_ca_contrib_top}.{fmt}"
+                         plotting.plot_ca_contribution(ca_results_combined, 0, n_ca_contrib_top, str(output_images_dir_abs / ca_contrib1_filename)) # type: ignore
+                    
                     if ca_results_combined.column_contributions_.shape[1] > 1:
-                         plotting.plot_ca_contribution(ca_results_combined, 1, n_ca_contrib_top, str(output_dir_path), fmt)
-            
-            # CA Axes vs Features Correlation Plot (using the new plotting function call structure)
+                         ca_contrib2_filename = f"ca_contribution_dim2_top{n_ca_contrib_top}.{fmt}"
+                         plotting.plot_ca_contribution(ca_results_combined, 1, n_ca_contrib_top, str(output_images_dir_abs / ca_contrib2_filename)) # type: ignore
+
             if ca_row_coords is not None and combined_per_sequence_df is not None and combined_ca_input_df is not None:
                 dim_x_idx, dim_y_idx = args.ca_dims[0], args.ca_dims[1]
                 max_available_dim = ca_row_coords.shape[1] - 1
                 ca_dims_prepared_df_for_plot: Optional[pd.DataFrame] = None
-
+                
                 if not (dim_x_idx > max_available_dim or dim_y_idx > max_available_dim or dim_x_idx == dim_y_idx):
                     ca_dims_prepared_df_for_plot = ca_row_coords[[dim_x_idx, dim_y_idx]].copy()
                     ca_dims_prepared_df_for_plot.columns = [f'CA_Dim{dim_x_idx+1}', f'CA_Dim{dim_y_idx+1}']
-                    if not ca_dims_prepared_df_for_plot.index.is_unique:
-                        ca_dims_prepared_df_for_plot = ca_dims_prepared_df_for_plot[~ca_dims_prepared_df_for_plot.index.duplicated(keep='first')]
 
+                    if not ca_dims_prepared_df_for_plot.index.is_unique: # pragma: no cover
+                        ca_dims_prepared_df_for_plot = ca_dims_prepared_df_for_plot[~ca_dims_prepared_df_for_plot.index.duplicated(keep='first')]
+                
                 metrics_prepared_df_for_plot: Optional[pd.DataFrame] = None
                 if 'ID' in combined_per_sequence_df.columns:
                     metrics_prepared_df_for_plot = combined_per_sequence_df.copy()
-                    if not metrics_prepared_df_for_plot['ID'].is_unique:
+
+                    if not metrics_prepared_df_for_plot['ID'].is_unique: # pragma: no cover
                         metrics_prepared_df_for_plot.drop_duplicates(subset=['ID'], keep='first', inplace=True)
                     metrics_prepared_df_for_plot.set_index('ID', inplace=True)
                 
-                rscu_prepared_df_for_plot = combined_ca_input_df.copy() # Already indexed correctly
-                if not rscu_prepared_df_for_plot.index.is_unique:
+                rscu_prepared_df_for_plot = combined_ca_input_df.copy()
+                if not rscu_prepared_df_for_plot.index.is_unique: # pragma: no cover
                      rscu_prepared_df_for_plot = rscu_prepared_df_for_plot[~rscu_prepared_df_for_plot.index.duplicated(keep='first')]
 
-
                 if ca_dims_prepared_df_for_plot is not None and metrics_prepared_df_for_plot is not None:
-                    metric_features = ['Length', 'TotalCodons', 'GC', 'GC1', 'GC2', 'GC3', 'GC12', 'ENC', 'CAI', 'Fop', 'RCDI', 'ProteinLength', 'GRAVY', 'Aromaticity']
+                    metric_features = ['Length', 'TotalCodons', 'GC', 'GC1', 'GC2', 'GC3', 'GC12', 
+                                       'ENC', 'CAI', 'Fop', 'RCDI', 'ProteinLength', 'GRAVY', 'Aromaticity']
                     available_metric_f = [f for f in metric_features if f in metrics_prepared_df_for_plot.columns]
-                    available_rscu_c = sorted([col for col in rscu_prepared_df_for_plot.columns if len(col) == 3 and col.isupper()])
+                    available_rscu_c = sorted([col for col in rscu_prepared_df_for_plot.columns if len(col) == 3 and col.isupper()]) # type: ignore
                     features_corr_plot = available_metric_f + available_rscu_c
                     
                     if features_corr_plot:
+                        ca_feat_corr_filename = f"ca_axes_feature_corr_{utils.sanitize_filename('Spearman')}.{fmt}"
                         plotting.plot_ca_axes_feature_correlation(
                             ca_dims_df=ca_dims_prepared_df_for_plot,
                             metrics_df=metrics_prepared_df_for_plot,
-                            rscu_df=rscu_prepared_df_for_plot,
-                            output_dir=str(output_dir_path),
-                            file_format=fmt,
+                            rscu_df=rscu_prepared_df_for_plot, # type: ignore
+                            output_filepath=str(output_images_dir_abs / ca_feat_corr_filename), # Pass full path
                             features_to_correlate=features_corr_plot
                         )
-            # Add plot for RSCU comparison if reference data is available
-            if reference_data_for_plot is not None and combined_per_sequence_df is not None:
-                # Need an aggregate usage df from combined_per_sequence_df or similar for observed RSCU
-                # This might require recalculating aggregate RSCU from all sequences if not readily available.
-                # For simplicity, this plot might be better if `agg_usage_df_complete` or a similar
-                # overall aggregate is passed or calculated here.
-                # Let's assume we'd use agg_usage_df_complete if available.
-                # This part needs careful data sourcing from the main flow.
-                pass # Placeholder - RSCU comparison plotting needs careful data plumbing
+            # RSCU comparison plot logic would also need to save to output_images_dir_abs
+            # if reference_data_for_plot is not None and combined_per_sequence_df is not None:
+            #    ...
+            #    rscu_comp_filename = f"rscu_comparison_scatter.{fmt}"
+            #    plotting.plot_usage_comparison(agg_usage_df_for_comp, reference_data_for_plot, str(output_images_dir_abs / rscu_comp_filename))
 
-        except Exception as plot_err:
+
+        except Exception as plot_err: # pragma: no cover
             logger.exception(f"Error during combined plot generation for format '{fmt}': {plot_err}")
 
+
 def _save_main_output_tables(
-    output_dir_path: Path,
-    combined_per_sequence_df: Optional[pd.DataFrame],
+    output_dir_path: Path, # Main output directory
+    combined_per_sequence_df: Optional[pd.DataFrame], # This is already saved by _finalize_and_save_per_sequence_metrics
     mean_summary_df: Optional[pd.DataFrame],
     comparison_results_df: Optional[pd.DataFrame]
-    # combined_ca_input_df (RSCU wide) is now saved in _perform_and_save_combined_ca
 ) -> None:
-    """Saves the main output CSV tables."""
-    if combined_per_sequence_df is not None and not combined_per_sequence_df.empty:
-        # This is already saved by _finalize_and_save_per_sequence_metrics
-        pass
+    """Saves the main output CSV tables to output_dir_path / "data"."""
+    data_subdir = output_dir_path / "data"
+    # data_subdir.mkdir(parents=True, exist_ok=True) # Already created by _ensure_output_subdirectories
+
+    # combined_per_sequence_df is saved by _finalize_and_save_per_sequence_metrics
     if mean_summary_df is not None and not mean_summary_df.empty:
-        filepath = output_dir_path / "mean_features_per_gene.csv"
+        filepath = data_subdir / "mean_features_per_gene.csv"
         mean_summary_df.to_csv(filepath, index=False, float_format='%.4f')
         logger.info(f"Mean features per gene saved: {filepath}")
+
     if comparison_results_df is not None and not comparison_results_df.empty:
-        filepath = output_dir_path / "gene_comparison_stats.csv"
+        filepath = data_subdir / "gene_comparison_stats.csv"
         comparison_results_df.to_csv(filepath, index=False, float_format='%.4g')
         logger.info(f"Gene comparison statistics saved: {filepath}")
 
@@ -1033,6 +1100,7 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
 
     # 1. Setup output directory (deferred from original, now done early by this helper)
     output_dir_path = _setup_output_directory(args.output)
+    _ensure_output_subdirectories(output_dir_path)
 
     # 2. Load Reference Data
     reference_weights, reference_data_for_plot = _load_reference_data(args)
@@ -1048,7 +1116,11 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
 
     # 6. Run Gene File Analysis (Parallel/Sequential)
     analyze_results_raw = _run_gene_file_analysis_in_parallel(
-        gene_files, args, reference_weights, expected_gene_names, num_processes
+        gene_files, args, 
+        reference_weights, 
+        expected_gene_names, 
+        num_processes, 
+        output_dir_path
     )
 
     # 7. Collect and Aggregate Initial Results
@@ -1067,9 +1139,8 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
     complete_analysis_results_tuple = (None, None, None, None, None, None, None) # Adjusted tuple size
     if sequences_by_original_id:
         complete_analysis_results_tuple = _analyze_complete_sequences_cli( # type: ignore
-            sequences_by_original_id, successfully_processed_genes, args, reference_weights
+            sequences_by_original_id, successfully_processed_genes, args, reference_weights, output_dir_path
         )
-        # _update_aggregate_data_with_complete_results needs to accept the new per-sequence freq dicts too
         _update_aggregate_data_with_complete_results( # type: ignore
             complete_analysis_results_tuple,
             all_per_sequence_dfs,
@@ -1077,14 +1148,14 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
             all_nucl_freqs_by_gene_agg,
             all_dinucl_freqs_by_gene_agg,
             all_nucl_freqs_per_seq_in_gene,
-            all_dinucl_freqs_per_seq_in_gene, # Pass them along
+            all_dinucl_freqs_per_seq_in_gene,
             args
         )
 
     # 9. Finalize and Save Per-Sequence Metrics (main combined table)
     combined_per_sequence_df = _finalize_and_save_per_sequence_metrics(all_per_sequence_dfs, output_dir_path) # type: ignore
     if combined_per_sequence_df is None:
-        logger.error("Failed to produce combined per-sequence metrics. Exiting.") #
+        logger.error("Failed to produce combined per-sequence metrics. Exiting.")
         sys.exit(1)
 
     # 10. Merge Metadata
@@ -1140,6 +1211,7 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
                  metadata_category_color_map_final = {cat: color for cat, color in zip(palette_categories_for_map, palette_list_meta)}
 
             # This is where we pass the per-sequence frequency data
+        
             _generate_plots_per_gene_colored_by_metadata( # type: ignore
                 args,
                 combined_per_sequence_df_with_meta,
@@ -1147,9 +1219,9 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
                 all_nucl_freqs_per_seq_in_gene,
                 all_dinucl_freqs_per_seq_in_gene,
                 metadata_col_for_color,
-                top_n_categories_map,
-                output_dir_path,
-                metadata_category_color_map_final
+                top_n_categories_map, # type: ignore
+                output_dir_path, # This is the main output directory
+                metadata_category_color_map_final # type: ignore
             )
 
     # 12. Generate Summary Tables (Means, Stats) and Relative Dinucleotide Abundance Table
@@ -1157,9 +1229,9 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
 
     mean_summary_df, comparison_results_df, rel_abund_df = _generate_summary_tables_and_stats( # type: ignore
         combined_per_sequence_df_with_meta,
-        all_nucl_freqs_by_gene_agg, # Aggregate frequencies for aggregate plots
+        all_nucl_freqs_by_gene_agg,
         all_dinucl_freqs_by_gene_agg,
-        output_dir_path
+        output_dir_path # Pass for context, though it might not use it directly for saving.
     )
 
     # 13. Perform Combined CA and Save Details
@@ -1176,7 +1248,8 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
         args, combined_per_sequence_df_with_meta, gene_color_map_standard,
         rel_abund_df, ca_results_combined, combined_ca_input_df_final,
         gene_groups_for_plotting, ca_row_coords_final,
-        reference_data_for_plot # Pass this for RSCU comparison plot if it's still generated here
+        reference_data_for_plot,
+        output_dir_path
     )
 
     # 16. Save Remaining Output Tables
@@ -1230,166 +1303,144 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
             report_gen.add_table(
                 "per_sequence_metrics",
                 combined_per_sequence_df_with_meta,
-                table_id="seq_metrics_table", # ID still useful if JS is added later
-                display_in_html=False # Instruct not to render the full table
+                table_csv_path_relative_to_outdir="data/per_sequence_metrics_all_genes.csv", # Example path
+                display_in_html=False
             )
             report_gen.add_table("gene_sequence_summary",
                                  gene_sequence_summary_df,
-                                 table_id="gene_summary_table")
+                                 table_csv_path_relative_to_outdir="data/gene_sequence_summary.csv" if gene_sequence_summary_df is not None and not gene_sequence_summary_df.empty else None
+                                 ) # Need to save this CSV first
+            if gene_sequence_summary_df is not None and not gene_sequence_summary_df.empty:
+                 (output_dir_path / "data" / "gene_sequence_summary.csv").parent.mkdir(parents=True, exist_ok=True)
+                 gene_sequence_summary_df.to_csv(output_dir_path / "data" / "gene_sequence_summary.csv", index=False, float_format='%.1f')
+
+
             report_gen.add_table("mean_features_per_gene",
                                  mean_summary_df,
-                                 table_id="mean_features_table")
+                                 table_csv_path_relative_to_outdir="data/mean_features_per_gene.csv" if mean_summary_df is not None else None)
             report_gen.add_table("gene_comparison_stats",
                                  comparison_results_df,
-                                 table_id="stats_comp_table")
+                                 table_csv_path_relative_to_outdir="data/gene_comparison_stats.csv" if comparison_results_df is not None else None)
 
             # For CA tables, ensure they are DataFrames before passing
-            ca_performed_successfully = False # Initialize
+            ca_performed_successfully = False
             if ca_results_combined and combined_ca_input_df_final is not None:
                 ca_performed_successfully = True
-                if hasattr(ca_results_combined,
-                           'row_coordinates'):
-                    df_ca_row = ca_results_combined.row_coordinates(combined_ca_input_df_final)
-                    report_gen.add_table("ca_combined_row_coordinates",
-                                         df_ca_row,
-                                         table_id="ca_row_coords_table",
-                                         display_in_html=False,
-                                         display_index=True)
-                if hasattr(ca_results_combined,
-                           'column_coordinates'):
+                report_gen.add_table("ca_combined_row_coordinates",
+                                     ca_row_coords_final, # This is already a DataFrame
+                                     table_csv_path_relative_to_outdir="data/ca_row_coordinates.csv" if ca_row_coords_final is not None else None,
+                                     display_in_html=False, display_index=True)
+                # ... (similar for other CA tables) ...
+                if hasattr(ca_results_combined, 'column_coordinates'):
                     df_ca_col = ca_results_combined.column_coordinates(combined_ca_input_df_final)
-                    report_gen.add_table("ca_combined_col_coordinates",
-                                         df_ca_col,
-                                         table_id="ca_col_coords_table",
-                                         display_in_html=False,
-                                         display_index=True)
-                if hasattr(ca_results_combined,
-                           'column_contributions_'):
+                    report_gen.add_table("ca_combined_col_coordinates", df_ca_col,
+                                         table_csv_path_relative_to_outdir="data/ca_col_coordinates.csv",
+                                         display_in_html=False, display_index=True)
+                if hasattr(ca_results_combined, 'column_contributions_'):
                     df_ca_contrib = ca_results_combined.column_contributions_
-                    report_gen.add_table("ca_combined_col_contributions",
-                                         df_ca_contrib,
-                                         table_id="ca_col_contrib_table",
+                    report_gen.add_table("ca_combined_col_contributions", df_ca_contrib,
+                                         table_csv_path_relative_to_outdir="data/ca_col_contributions.csv",
                                          display_index=True)
-                if hasattr(ca_results_combined,
-                           'eigenvalues_summary'):
+                if hasattr(ca_results_combined, 'eigenvalues_summary'):
                     df_ca_eigen = ca_results_combined.eigenvalues_summary
-                    report_gen.add_table("ca_combined_eigenvalues",
-                                         df_ca_eigen,
-                                         table_id="ca_eigen_table",
+                    report_gen.add_table("ca_combined_eigenvalues", df_ca_eigen,
+                                         table_csv_path_relative_to_outdir="data/ca_eigenvalues.csv",
                                          display_index=True)
 
-            report_gen.set_ca_performed_status(ca_performed_successfully) # Pass status to generator
+            report_gen.set_ca_performed_status(ca_performed_successfully)
 
             if combined_ca_input_df_final is not None:
                  report_gen.add_table("per_sequence_rscu_wide",
                                       combined_ca_input_df_final,
-                                      table_id="rscu_wide_table",
+                                      table_csv_path_relative_to_outdir="data/per_sequence_rscu_wide.csv",
                                       display_in_html=False)
-
 
             # 3. Add paths to COMBINED plots
             report_plot_format = args.plot_formats[0]
-
-            def get_plot_path(name_pattern: str) -> Optional[str]:
-                p_path = output_dir_path / f"{name_pattern}.{report_plot_format}"
-                return str(p_path) if p_path.exists() else None
-
-            report_gen.add_plot("gc_means_barplot_by_Gene",
-                                get_plot_path("gc_means_barplot_by_Gene"),
-                                category="combined_plots")
+            def get_plot_rel_path_for_report(base_filename_pattern: str) -> Optional[str]:
+                # Constructs path like "images/plot_name.format"
+                # This path is relative to output_dir_path
+                filename = f"{base_filename_pattern}.{report_plot_format}"
+                # Check if the actual file exists in output_dir_path / "images" / filename
+                if (output_dir_path / "images" / filename).exists():
+                    return f"images/{filename}"
+                # For plots in subdirs of "images"
+                elif (output_dir_path / "images" / base_filename_pattern.split('/')[0] / f"{base_filename_pattern.split('/')[-1]}.{report_plot_format}").exists() and '/' in base_filename_pattern:
+                     # This part is tricky if base_filename_pattern includes subdirs already.
+                     # Let's assume base_filename_pattern is just the core name for now.
+                     # For complex paths, the caller to add_plot should construct the correct relative path.
+                     return f"images/{base_filename_pattern.split('/')[0]}/{base_filename_pattern.split('/')[-1]}.{report_plot_format}"
+                logger.warning(f"Plot file for report not found: images/{filename} or similar structured path.")
+                return None
+            
+            report_gen.add_plot(
+                "gc_means_barplot_by_Gene",
+                get_plot_rel_path_for_report("gc_means_barplot_by_Gene")
+            )
             report_gen.add_plot("enc_vs_gc3_combined",
-                                get_plot_path(
-                                    f"enc_vs_gc3_plot_{utils.sanitize_filename('_grouped_by_gene')}"
-                                    ),
-                                category="combined_plots")
+                get_plot_rel_path_for_report(f"enc_vs_gc3_plot_{utils.sanitize_filename('_grouped_by_gene')}"))
             report_gen.add_plot("neutrality_plot_combined",
-                                get_plot_path(
-                                    f"neutrality_plot_{utils.sanitize_filename('_grouped_by_gene')}"
-                                    ),
-                                category="combined_plots")
+                get_plot_rel_path_for_report(f"neutrality_plot_{utils.sanitize_filename('_grouped_by_gene')}"))
             report_gen.add_plot("relative_dinucleotide_abundance_combined",
-                                get_plot_path("relative_dinucleotide_abundance"),
-                                category="combined_plots")
+                get_plot_rel_path_for_report("relative_dinucleotide_abundance"))
 
             if not args.skip_ca and ca_results_combined:
                 ca_suffix_combined = utils.sanitize_filename('_combined_by_gene')
-                report_gen.add_plot(
-                    "ca_biplot_combined",
-                    get_plot_path(
-                        f"ca_biplot_comp{args.ca_dims[0]+1}v{args.ca_dims[1]+1}_{ca_suffix_combined}"
-                        ),
-                    category="combined_plots"
-                )
-                report_gen.add_plot(
-                    "ca_variance_explained",
-                    get_plot_path(
-                        f"ca_variance_explained_top{10}" # Assuming N=10
-                        ),
-                    category="combined_plots"
-                )
-                report_gen.add_plot(
-                    "ca_contribution_dim1",
-                    get_plot_path(
-                        f"ca_contribution_dim{1}_top{10}" # Assuming N=10, Dim=1
-                        ),
-                    category="combined_plots"
-                )
-                report_gen.add_plot(
-                    "ca_contribution_dim2",
-                    get_plot_path(
-                        f"ca_contribution_dim{2}_top{10}" # Assuming N=10, Dim=2
-                        ),
-                    category="combined_plots"
-                    )
+                report_gen.add_plot("ca_biplot_combined",
+                    get_plot_rel_path_for_report(f"ca_biplot_comp{args.ca_dims[0]+1}v{args.ca_dims[1]+1}_{ca_suffix_combined}"))
+                report_gen.add_plot("ca_variance_explained",
+                    get_plot_rel_path_for_report(f"ca_variance_explained_top{10}"))
+                report_gen.add_plot("ca_contribution_dim1",
+                    get_plot_rel_path_for_report(f"ca_contribution_dim1_top{10}"))
+                report_gen.add_plot("ca_contribution_dim2",
+                    get_plot_rel_path_for_report(f"ca_contribution_dim2_top{10}"))
 
             report_gen.add_plot("feature_correlation_heatmap",
-                                get_plot_path(f"feature_correlation_heatmap_spearman"),
-                                category="combined_plots")
+                get_plot_rel_path_for_report(f"feature_correlation_heatmap_spearman"))
             ca_axes_corr_method_name_sanitized = utils.sanitize_filename("Spearman")
-            report_gen.add_plot(
-                "ca_axes_feature_corr",
-                get_plot_path(f"ca_axes_feature_corr_{ca_axes_corr_method_name_sanitized}"),
-                category="combined_plots"
-            )
+            report_gen.add_plot("ca_axes_feature_corr",
+                get_plot_rel_path_for_report(f"ca_axes_feature_corr_{ca_axes_corr_method_name_sanitized}"))
+
 
             # 4. Add paths to per-gene RSCU boxplots
-            if 'successfully_processed_genes' in locals() and successfully_processed_genes:
-                for gene_name_for_plot in successfully_processed_genes:
-                    plot_fn = f"RSCU_boxplot_{utils.sanitize_filename(gene_name_for_plot)}.{report_plot_format}"
+            if 'successfully_processed_genes' in locals() and successfully_processed_genes: # type: ignore
+                for gene_name_for_plot in successfully_processed_genes: # type: ignore
+                    plot_filename_base = f"RSCU_boxplot_{utils.sanitize_filename(gene_name_for_plot)}"
                     target_dict_rscu = report_gen.report_data["plot_paths"]["per_gene_rscu_boxplots"].setdefault(gene_name_for_plot, {})
                     report_gen.add_plot(
                         plot_key="rscu_boxplot",
-                        plot_abs_path=str(output_dir_path / plot_fn),
+                        plot_path_relative_to_outdir=get_plot_rel_path_for_report(plot_filename_base),
                         plot_dict_target=target_dict_rscu
                     )
-            if "complete" in all_nucl_freqs_by_gene_agg:
-                plot_fn_complete = f"RSCU_boxplot_complete.{report_plot_format}"
+            if "complete" in all_nucl_freqs_by_gene_agg: # type: ignore
+                plot_filename_base_complete = "RSCU_boxplot_complete"
                 target_dict_rscu_complete = report_gen.report_data["plot_paths"]["per_gene_rscu_boxplots"].setdefault("complete", {})
                 report_gen.add_plot(
                     plot_key="rscu_boxplot",
-                    plot_abs_path=str(output_dir_path / plot_fn_complete),
+                    plot_path_relative_to_outdir=get_plot_rel_path_for_report(plot_filename_base_complete),
                     plot_dict_target=target_dict_rscu_complete
                 )
 
-            # 5. Add paths to per-gene plots colored by metadata
-            if args.color_by_metadata and metadata_df is not None and 'palette_categories_for_map' in locals() :
+            # Add per-gene plots colored by metadata to report
+            if args.color_by_metadata and metadata_df is not None and 'palette_categories_for_map' in locals(): # type: ignore
                 meta_col = args.color_by_metadata
                 report_gen.report_data["metadata_info"]["column_used_for_coloring"] = meta_col
-                report_gen.report_data["metadata_info"]["categories_shown"] = palette_categories_for_map
-                report_gen.report_data["metadata_info"]["other_category_used"] = "Other" in palette_categories_for_map
+                report_gen.report_data["metadata_info"]["categories_shown"] = palette_categories_for_map # type: ignore
+                report_gen.report_data["metadata_info"]["other_category_used"] = "Other" in palette_categories_for_map # type: ignore
 
                 meta_col_plot_data = report_gen.report_data["plot_paths"]["per_gene_metadata_plots"].setdefault(meta_col, {})
-                meta_plot_base_rel_dir_name = f"{utils.sanitize_filename(meta_col)}_per_gene_plots"
-                meta_plot_abs_base_dir = output_dir_path / meta_plot_base_rel_dir_name
+                # Base dir where these plots are saved: output_dir_path / "images" / SANITIZED_META_COL_per_gene_plots /
+                meta_plots_image_subdir_name = f"{utils.sanitize_filename(meta_col)}_per_gene_plots"
 
                 genes_with_metadata_plots = []
                 if combined_per_sequence_df_with_meta is not None:
                     genes_with_metadata_plots = combined_per_sequence_df_with_meta['Gene'].unique()
 
                 for gene_name_for_meta_plot in genes_with_metadata_plots:
-                    gene_specific_meta_plot_dir = meta_plot_abs_base_dir / utils.sanitize_filename(gene_name_for_meta_plot)
+                    gene_specific_meta_plot_subdir_name = utils.sanitize_filename(gene_name_for_meta_plot)
                     gene_plot_target_dict = meta_col_plot_data.setdefault(gene_name_for_meta_plot, {})
                     filename_suffix_meta_gene = f"_{utils.sanitize_filename(gene_name_for_meta_plot)}_by_{utils.sanitize_filename(meta_col)}"
+
                     plot_types_filename_map = {
                         "enc_vs_gc3": f"enc_vs_gc3_plot{filename_suffix_meta_gene}",
                         "neutrality": f"neutrality_plot{filename_suffix_meta_gene}",
@@ -1397,19 +1448,22 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
                         "dinucl_abundance": f"dinucl_abundance{filename_suffix_meta_gene}"
                     }
                     for plot_type_key, filename_base in plot_types_filename_map.items():
-                        plot_filename = f"{filename_base}.{report_plot_format}"
-                        abs_path = gene_specific_meta_plot_dir / plot_filename
-                        report_gen.add_plot(
-                            plot_key=plot_type_key,
-                            plot_abs_path=str(abs_path),
-                            plot_dict_target=gene_plot_target_dict
-                        )
+                        # Construct the path relative to output_dir_root, like "images/METAPLOTS_SUBDIR/GENE_SUBDIR/plotname.fmt"
+                        plot_rel_path = Path("images") / meta_plots_image_subdir_name / gene_specific_meta_plot_subdir_name / f"{filename_base}.{report_plot_format}"
+                        # We need to check if this file actually exists
+                        if (output_dir_path / plot_rel_path).exists():
+                            report_gen.add_plot(
+                                plot_key=plot_type_key,
+                                plot_path_relative_to_outdir=str(plot_rel_path),
+                                plot_dict_target=gene_plot_target_dict
+                            )
+                        else:
+                            report_gen.add_plot(plot_key=plot_type_key, plot_path_relative_to_outdir=None, plot_dict_target=gene_plot_target_dict)
             else:
                 report_gen.report_data["metadata_info"]["column_used_for_coloring"] = None
                 report_gen.report_data["metadata_info"]["categories_shown"] = []
                 report_gen.report_data["metadata_info"]["other_category_used"] = False
 
-            # 6. Generate the actual HTML files
             report_gen.generate_report()
     else:
         logger.info("Skipping HTML report generation as per --no-html-report flag.")
@@ -1420,17 +1474,17 @@ def process_analyze_gene_file(
     gene_filepath: str,
     args: argparse.Namespace,
     reference_weights: Optional[Dict[str, float]],
-    expected_gene_names: Set[str]
+    expected_gene_names: Set[str],
+    output_dir_path_for_plots: Path # ADDED: This is the main output_dir_path
 ) -> Optional[ProcessGeneFileResultType]:
     """
     Worker function for the 'analyze' subcommand.
-    (Content of this function remains the same as in your provided cli.py)
+    Saves its per-gene RSCU boxplot to output_dir_path_for_plots / "images" / ...
     """
-
     try:
         import matplotlib
-        matplotlib.use('Agg')
-    except ImportError:
+        matplotlib.use('Agg') # type: ignore
+    except ImportError: # pragma: no cover
         logging.getLogger("pycodon_analyzer.worker").error(f"[Worker {os.getpid()}] Matplotlib not found.")
     except Exception as backend_err: # pragma: no cover
         logging.getLogger("pycodon_analyzer.worker").warning(f"[Worker {os.getpid()}] Could not set Matplotlib backend: {backend_err}")
@@ -1439,51 +1493,38 @@ def process_analyze_gene_file(
     gene_name: Optional[str] = extract_gene_name_from_file(gene_filepath)
 
     if not gene_name or gene_name not in expected_gene_names:
-        return None # Skip if not an expected gene
+        return None
 
     worker_logger.debug(f"Processing gene: {gene_name} (File: {Path(gene_filepath).name})")
-
-    # Initialize all parts of the return tuple to None or default
     per_sequence_df_gene: Optional[pd.DataFrame] = None
     ca_input_df_gene: Optional[pd.DataFrame] = None
-    nucl_freqs_gene_agg: Optional[Dict[str, float]] = None # Aggregate for this gene
-    dinucl_freqs_gene_agg: Optional[Dict[str, float]] = None # Aggregate for this gene
+    nucl_freqs_gene_agg: Optional[Dict[str, float]] = None
+    dinucl_freqs_gene_agg: Optional[Dict[str, float]] = None
     cleaned_seq_map: Optional[Dict[str, Seq]] = None
-    per_seq_nucl_freqs: Optional[Dict[str, Dict[str, float]]] = None 
-    per_seq_dinucl_freqs: Optional[Dict[str, Dict[str, float]]] = None 
+    per_seq_nucl_freqs: Optional[Dict[str, Dict[str, float]]] = None
+    per_seq_dinucl_freqs: Optional[Dict[str, Dict[str, float]]] = None
 
     try:
         raw_sequences: List[SeqRecord] = io.read_fasta(gene_filepath)
         if not raw_sequences:
             return (gene_name, "empty file", None, None, None, None, None, None, None)
 
-        cleaned_sequences: List[SeqRecord] = utils.clean_and_filter_sequences(raw_sequences, args.max_ambiguity)
+        cleaned_sequences: List[SeqRecord] = utils.clean_and_filter_sequences(raw_sequences, 
+                                                                              args.max_ambiguity)
         if not cleaned_sequences:
-            return (gene_name, "no valid seqs", None, None, None, None, None, None, None)
-        
-        cleaned_seq_map = {rec.id: rec.seq for rec in cleaned_sequences if rec.id} # Store original IDs
+            return (gene_name, "no valid seqs", 
+                    None, None, None, None, None, None, None)
+
+        cleaned_seq_map = {rec.id: rec.seq for rec in cleaned_sequences if rec.id}
 
         analysis_results_tuple: FullAnalysisResultType = analysis.run_full_analysis(
             cleaned_sequences, args.genetic_code, reference_weights=reference_weights
         )
-        
-        # Unpack results from run_full_analysis
-        # FullAnalysisResultType: (agg_usage_df, per_sequence_df, overall_nucl_freqs_agg, overall_dinucl_freqs_agg,
-        #                          per_sequence_nucl_freqs, per_sequence_dinucl_freqs,
-        #                          None (placeholder1), None (placeholder2), ca_input_df_rscu_wide)
-        
-        agg_usage_df_gene = analysis_results_tuple[0]      # Aggregate RSCU, Freq for this gene
-        per_sequence_df_gene = analysis_results_tuple[1]   # Metrics per sequence for this gene
-        nucl_freqs_gene_agg = analysis_results_tuple[2]    # Aggregate nucleotide freqs for this gene
-        dinucl_freqs_gene_agg = analysis_results_tuple[3]  # Aggregate dinucleotide freqs for this gene
-        per_seq_nucl_freqs = analysis_results_tuple[4]     # Per-sequence nucleotide freqs
-        per_seq_dinucl_freqs = analysis_results_tuple[5]   # Per-sequence dinucleotide freqs
-        # Placeholders are analysis_results_tuple[6] and analysis_results_tuple[7]
-        ca_input_df_gene = analysis_results_tuple[8]       # RSCU per sequence (wide format) for this gene
+        agg_usage_df_gene, per_sequence_df_gene, nucl_freqs_gene_agg, dinucl_freqs_gene_agg, \
+        per_seq_nucl_freqs, per_seq_dinucl_freqs, _, _, ca_input_df_gene = analysis_results_tuple
 
         worker_logger.debug(f"Core analysis complete for {gene_name}.")
 
-        # --- Per-Gene RSCU Boxplot ---
         if not args.skip_plots and agg_usage_df_gene is not None and not agg_usage_df_gene.empty and \
            ca_input_df_gene is not None and not ca_input_df_gene.empty:
             try:
@@ -1492,28 +1533,33 @@ def process_analyze_gene_file(
                 current_genetic_code: Dict[str, str] = utils.get_genetic_code(args.genetic_code)
                 long_rscu_df['AminoAcid'] = long_rscu_df['Codon'].map(current_genetic_code.get)
                 for fmt in args.plot_formats:
-                    plotting.plot_rscu_boxplot_per_gene(long_rscu_df, 
-                                                        agg_usage_df_gene, 
-                                                        gene_name, 
-                                                        args.output, 
-                                                        fmt)
-            except Exception as plot_prep_err:
+                    # Construct full save path for the plot
+                    plot_filename = f"RSCU_boxplot_{utils.sanitize_filename(gene_name)}.{fmt}"
+                    # Plots are saved in output_dir_path_for_plots / "images"
+                    rscu_boxplot_filepath = output_dir_path_for_plots / "images" / plot_filename
+                    # The plotting function now takes the full filepath
+                    plotting.plot_rscu_boxplot_per_gene(
+                        long_rscu_df,
+                        agg_usage_df_gene,
+                        gene_name, # Still needed for plot title
+                        str(rscu_boxplot_filepath) # Pass the full path
+                    )
+            except Exception as plot_prep_err: # pragma: no cover
                 worker_logger.error(f"Failed to prepare/plot RSCU boxplot for {gene_name}: {plot_prep_err}")
 
-        # --- Prepare results for return ---
         if per_sequence_df_gene is not None and not per_sequence_df_gene.empty:
             if 'ID' in per_sequence_df_gene.columns:
                  per_sequence_df_gene['Original_ID'] = per_sequence_df_gene['ID']
                  per_sequence_df_gene['ID'] = f"{gene_name}__" + per_sequence_df_gene['ID'].astype(str)
             per_sequence_df_gene['Gene'] = gene_name
-        
+
         if ca_input_df_gene is not None and not ca_input_df_gene.empty:
             ca_input_df_gene.index = f"{gene_name}__" + ca_input_df_gene.index.astype(str)
 
         worker_logger.debug(f"Finished processing for gene: {gene_name}")
         return (gene_name, "success", per_sequence_df_gene, ca_input_df_gene,
                 nucl_freqs_gene_agg, dinucl_freqs_gene_agg, cleaned_seq_map,
-                per_seq_nucl_freqs, per_seq_dinucl_freqs) # Added new results
+                per_seq_nucl_freqs, per_seq_dinucl_freqs)
 
     except FileNotFoundError: # pragma: no cover
         worker_logger.error(f"File not found error for gene {gene_name}: {gene_filepath}")

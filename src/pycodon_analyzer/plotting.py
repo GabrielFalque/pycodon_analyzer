@@ -9,6 +9,7 @@
 Functions for generating plots related to codon usage and sequence properties.
 Uses Matplotlib and Seaborn for plotting.
 """
+from pathlib import Path
 import re
 import os
 import sys
@@ -106,7 +107,8 @@ AA_ORDER: List[str] = sorted(AA_1_TO_3.keys())
 
 # === Aggregate Plots ===
 
-def plot_rscu(rscu_df: pd.DataFrame, output_dir: str, file_format: str = 'svg') -> None:
+def plot_rscu(rscu_df: pd.DataFrame, 
+              output_filepath: str) -> None:
     """
     Generates a bar plot of aggregate RSCU values, grouped by amino acid.
 
@@ -161,9 +163,10 @@ def plot_rscu(rscu_df: pd.DataFrame, output_dir: str, file_format: str = 'svg') 
             plt.tight_layout()
 
         # Save the plot
-        output_filename = os.path.join(output_dir, f"rscu_barplot.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"RSCU plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"RSCU plot saved to: {output_path_obj}")
 
     except (ValueError, TypeError) as data_err:
         logger.error(f"Data error during RSCU plot generation (check data types/values): {data_err}")
@@ -173,7 +176,8 @@ def plot_rscu(rscu_df: pd.DataFrame, output_dir: str, file_format: str = 'svg') 
         if fig is not None: plt.close(fig)
 
 
-def plot_codon_frequency(rscu_df: pd.DataFrame, output_dir: str, file_format: str = 'svg') -> None:
+def plot_codon_frequency(rscu_df: pd.DataFrame, 
+                         output_filepath: str) -> None:
     """
     Generates a bar plot of aggregate codon frequencies.
 
@@ -213,9 +217,10 @@ def plot_codon_frequency(rscu_df: pd.DataFrame, output_dir: str, file_format: st
         plt.tight_layout()
 
         # Save the plot
-        output_filename = os.path.join(output_dir, f"codon_frequency_barplot.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"Codon frequency plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"Codon frequency plot saved to: {output_path_obj}")
 
     except (ValueError, TypeError) as data_err:
         logger.error(f"Error preparing data or plotting Codon Frequency: {data_err}")
@@ -225,7 +230,8 @@ def plot_codon_frequency(rscu_df: pd.DataFrame, output_dir: str, file_format: st
         if fig is not None: plt.close(fig)
 
 
-def plot_dinucleotide_freq(dinucl_freqs: Dict[str, float], output_dir: str, file_format: str = 'svg') -> None:
+def plot_dinucleotide_freq(dinucl_freqs: Dict[str, float], 
+                           output_filepath: str) -> None:
     """
     Plots relative dinucleotide frequencies as a bar chart.
 
@@ -265,9 +271,10 @@ def plot_dinucleotide_freq(dinucl_freqs: Dict[str, float], output_dir: str, file
         ax.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
 
-        output_filename = os.path.join(output_dir, f"dinucleotide_freq.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"Dinucleotide frequency plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"Dinucleotide frequency plot saved to: {output_path_obj}")
 
     except Exception as e:
          logger.exception(f"Error during seaborn barplot generation for Dinucleotides: {e}")
@@ -275,7 +282,9 @@ def plot_dinucleotide_freq(dinucl_freqs: Dict[str, float], output_dir: str, file
         if fig is not None: plt.close(fig)
 
 
-def plot_gc_means_barplot(per_sequence_df: pd.DataFrame, output_dir: str, file_format: str = 'svg', group_by: str = 'Gene') -> None:
+def plot_gc_means_barplot(per_sequence_df: pd.DataFrame, 
+                          output_filepath: str, 
+                          group_by: str = 'Gene') -> None:
     """
     Plots a grouped bar chart of mean GC%, GC1-3%, GC12 values per group (e.g., 'Gene').
 
@@ -343,9 +352,10 @@ def plot_gc_means_barplot(per_sequence_df: pd.DataFrame, output_dir: str, file_f
              logger.warning(f"Could not place GC means plot legend optimally: {legend_err}.")
              plt.tight_layout()
 
-        output_filename = os.path.join(output_dir, f"gc_means_barplot_by_{plot_utils.sanitize_filename(group_by)}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"GC means barplot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"GC means barplot saved to: {output_path_obj}")
 
     except (ValueError, TypeError, KeyError) as data_err:
         logger.error(f"Data error during GC means plot generation: {data_err}")
@@ -356,8 +366,7 @@ def plot_gc_means_barplot(per_sequence_df: pd.DataFrame, output_dir: str, file_f
 
 
 def plot_neutrality(per_sequence_df: pd.DataFrame,
-                    output_dir: str,
-                    file_format: str = 'svg',
+                    output_filepath: str,
                     group_by_col: Optional[str] = None, # Renamed, can be 'Gene' or metadata col
                     palette: Optional[Dict[str, Any]] = None, # Palette for group_by_col
                     filename_suffix: str = "",
@@ -488,10 +497,10 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
              plt.tight_layout()
 
         # Saving
-        safe_suffix = plot_utils.sanitize_filename(filename_suffix)
-        output_filename = os.path.join(output_dir, f"neutrality_plot_{safe_suffix}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"Neutrality plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"Neutrality plot saved to: {output_path_obj}")
 
     except (ValueError, TypeError, KeyError) as data_err:
         logger.error(f"Data error during Neutrality plot generation: {data_err}")
@@ -502,8 +511,7 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
 
 
 def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
-                    output_dir: str,
-                    file_format: str = 'svg',
+                    output_filepath: str,
                     group_by_col: Optional[str] = None, # Renamed from group_by for clarity, can be 'Gene' or a metadata column
                     palette: Optional[Dict[str, Any]] = None, # Palette for the group_by_col
                     filename_suffix: str = "",
@@ -640,10 +648,10 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
             plt.tight_layout()
 
         # Saving
-        safe_suffix = plot_utils.sanitize_filename(filename_suffix)
-        output_filename = os.path.join(output_dir, f"enc_vs_gc3_plot_{safe_suffix}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"ENC vs GC3 plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"ENC vs GC3 plot saved to: {output_path_obj}")
 
     except (ValueError, TypeError, KeyError) as data_err:
         logger.error(f"Data error during ENC vs GC3 plot generation: {data_err}")
@@ -656,8 +664,7 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
 def plot_per_gene_dinucleotide_abundance_by_metadata(
     per_sequence_oe_ratios_df: pd.DataFrame, # Cols: Dinucleotide, RelativeAbundance, and metadata_hue_col
     metadata_hue_col: str,
-    output_dir: str,
-    file_format: str,
+    output_filepath: str,
     palette: Optional[Dict[str, Any]], # Palette for metadata categories
     gene_name: str, # For title and filename
     filename_suffix_extra: str = "" # e.g., "_by_lineage"
@@ -746,11 +753,10 @@ def plot_per_gene_dinucleotide_abundance_by_metadata(
         else:
             plt.tight_layout()
 
-        safe_gene_name = plot_utils.sanitize_filename(gene_name)
-        safe_suffix_extra = plot_utils.sanitize_filename(filename_suffix_extra)
-        output_filename = os.path.join(output_dir, f"dinucl_abundance_{safe_suffix_extra}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"Per-gene dinucleotide abundance plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"Per-gene dinucleotide abundance plot saved to: {output_path_obj}")
 
     except Exception as e:
         logger.exception(f"Error generating per-gene dinucleotide abundance plot for '{gene_name}': {e}")
@@ -759,7 +765,10 @@ def plot_per_gene_dinucleotide_abundance_by_metadata(
             plt.close(fig)
 
 
-def plot_ca_contribution(ca_results: PrinceCA, dimension: int, n_top: int, output_dir: str, file_format: str) -> None: # type: ignore
+def plot_ca_contribution(ca_results: PrinceCA, 
+                         dimension: int, 
+                         n_top: int, 
+                         output_filepath: str) -> None: # type: ignore
     """
     Generates a bar plot of the top N variables (codons) contributing
     to a specific CA dimension.
@@ -827,9 +836,10 @@ def plot_ca_contribution(ca_results: PrinceCA, dimension: int, n_top: int, outpu
 
         plt.tight_layout()
 
-        output_filename = os.path.join(output_dir, f"ca_contribution_dim{dimension+1}_top{n_top}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"CA contribution plot for Dim {dimension+1} saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"CA contribution plot for Dim {dimension+1} saved to: {output_path_obj}")
 
     except AttributeError as ae:
          logger.error(f"AttributeError accessing CA results for contribution plot: {ae}")
@@ -841,7 +851,9 @@ def plot_ca_contribution(ca_results: PrinceCA, dimension: int, n_top: int, outpu
         if fig is not None: plt.close(fig)
 
 
-def plot_ca_variance(ca_results: PrinceCA, n_dims: int, output_dir: str, file_format: str) -> None: # type: ignore
+def plot_ca_variance(ca_results: PrinceCA, 
+                     n_dims: int, 
+                     output_filepath: str) -> None: # type: ignore
     """
     Generates a bar plot of the variance explained by the first N CA dimensions.
 
@@ -930,9 +942,10 @@ def plot_ca_variance(ca_results: PrinceCA, n_dims: int, output_dir: str, file_fo
 
         plt.tight_layout()
 
-        output_filename = os.path.join(output_dir, f"ca_variance_explained_top{n_dims_actual}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"CA variance explained plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"CA variance explained plot saved to: {output_path_obj}")
 
     except AttributeError as ae:
         logger.error(f"AttributeError accessing CA results for variance plot: {ae}")
@@ -947,8 +960,7 @@ def plot_ca_variance(ca_results: PrinceCA, n_dims: int, output_dir: str, file_fo
 def plot_ca(
     ca_results: PrinceCA,
     ca_input_df: pd.DataFrame,
-    output_dir: str,
-    file_format: str = 'svg',
+    output_filepath: str,
     comp_x: int = 0,
     comp_y: int = 1,
     groups: Optional[pd.Series] = None, # This will be the metadata series for hueing
@@ -1135,10 +1147,10 @@ def plot_ca(
             plt.tight_layout() 
 
         # Saving
-        safe_suffix = plot_utils.sanitize_filename(filename_suffix)
-        output_filename = os.path.join(output_dir, f"ca_biplot_comp{comp_x+1}v{comp_y+1}_{safe_suffix}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"CA biplot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"CA biplot saved to: {output_path_obj}")
 
     except (ValueError, TypeError, KeyError, AttributeError) as data_err:
          logger.error(f"{plot_title_prefix}Data error during CA plot generation: {data_err}")
@@ -1148,7 +1160,9 @@ def plot_ca(
         if fig is not None: plt.close(fig)
 
 
-def plot_usage_comparison(agg_usage_df: pd.DataFrame, reference_data: pd.DataFrame, output_dir: str, file_format: str = 'svg') -> None:
+def plot_usage_comparison(agg_usage_df: pd.DataFrame, 
+                          reference_data: pd.DataFrame, 
+                          output_filepath: str) -> None:
     """
     Plots observed vs reference RSCU values (Scatter plot).
 
@@ -1217,9 +1231,10 @@ def plot_usage_comparison(agg_usage_df: pd.DataFrame, reference_data: pd.DataFra
         ax.legend()
         plt.tight_layout()
 
-        output_filename = os.path.join(output_dir, f"rscu_comparison_scatter.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"RSCU comparison plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"RSCU comparison plot saved to: {output_path_obj}")
 
     except (ValueError, TypeError, KeyError) as data_err:
         logger.error(f"Data error during RSCU comparison plot generation: {data_err}")
@@ -1230,8 +1245,7 @@ def plot_usage_comparison(agg_usage_df: pd.DataFrame, reference_data: pd.DataFra
 
 
 def plot_relative_dinucleotide_abundance(rel_abund_df: pd.DataFrame, 
-                                         output_dir: str, 
-                                         file_format: str = 'svg',
+                                         output_filepath: str,
                                          palette: Optional[Dict[str, Any]] = None
                                          ) -> None:
     """
@@ -1297,9 +1311,10 @@ def plot_relative_dinucleotide_abundance(rel_abund_df: pd.DataFrame,
              logger.warning(f"Could not place relative dinuc abundance legend optimally: {legend_err}.")
              plt.tight_layout()
 
-        output_filename = os.path.join(output_dir, f"relative_dinucleotide_abundance.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"Relative dinucleotide abundance plot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"Relative dinucleotide abundance plot saved to: {output_path_obj}")
 
     except (ValueError, TypeError, KeyError) as data_err:
         logger.error(f"Data error during relative dinucleotide abundance plot generation: {data_err}")
@@ -1313,8 +1328,7 @@ def plot_rscu_boxplot_per_gene(
     long_rscu_df: pd.DataFrame,
     agg_rscu_df: pd.DataFrame,
     gene_name: str,
-    output_dir: str,
-    file_format: str = 'svg'
+    output_filepath: str
 ) -> None:
     """
     Generates a box plot of RSCU value distributions for a specific gene,
@@ -1475,10 +1489,10 @@ def plot_rscu_boxplot_per_gene(
         plt.tight_layout(rect=[0, 0.03, 1, 0.97]) # Adjust layout slightly
 
         # Save the plot
-        safe_gene_name = plot_utils.sanitize_filename(gene_name)
-        output_filename = os.path.join(output_dir, f"RSCU_boxplot_{safe_gene_name}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"RSCU boxplot saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"RSCU boxplot saved to: {output_path_obj}")
 
     except (ValueError, TypeError, KeyError) as data_err:
         logger.error(f"Data error during RSCU boxplot generation for '{gene_name}': {data_err}")
@@ -1492,8 +1506,7 @@ def plot_rscu_boxplot_per_gene(
 def plot_correlation_heatmap(
     df: pd.DataFrame,
     features: List[str],
-    output_dir: str,
-    file_format: str,
+    output_filepath: str,
     method: str = 'spearman'
 ) -> None:
     """
@@ -1555,9 +1568,10 @@ def plot_correlation_heatmap(
         ax.tick_params(axis='y', rotation=0, labelsize=y_fontsize)
         plt.tight_layout()
 
-        output_filename = os.path.join(output_dir, f"feature_correlation_heatmap_{method}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"Feature correlation heatmap saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"Feature correlation heatmap saved to: {output_path_obj}")
 
     except (ValueError, TypeError, KeyError) as data_err:
         logger.error(f"Data error during correlation heatmap generation: {data_err}")
@@ -1570,8 +1584,7 @@ def plot_ca_axes_feature_correlation(
     ca_dims_df: pd.DataFrame, # DataFrame with CA_Dim1, CA_Dim2, index should be gene__sequenceID
     metrics_df: pd.DataFrame, # DataFrame with metrics, index should be gene__sequenceID
     rscu_df: pd.DataFrame,    # DataFrame with RSCU values, index should be gene__sequenceID
-    output_dir: str,
-    file_format: str,
+    output_filepath: str,
     significance_threshold: float = 0.05,
     method_name: str = "Spearman",
     features_to_correlate: Optional[List[str]] = None # Allow passing specific features
@@ -1796,10 +1809,10 @@ def plot_ca_axes_feature_correlation(
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-        safe_method_name = plot_utils.sanitize_filename(method_name) # Assuming sanitize_filename is available
-        output_filename = os.path.join(output_dir, f"ca_axes_feature_corr_{safe_method_name}.{file_format}")
-        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-        logger.info(f"CA Axes vs Features correlation heatmap saved to: {output_filename}")
+        output_path_obj = Path(output_filepath)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True) # Ensure parent dir exists
+        plt.savefig(output_path_obj, dpi=300, bbox_inches='tight')
+        logger.info(f"CA Axes vs Features correlation heatmap saved to: {output_path_obj}")
 
     except Exception as e:
         logger.exception(f"Error generating CA Axes vs Features correlation heatmap: {e}")

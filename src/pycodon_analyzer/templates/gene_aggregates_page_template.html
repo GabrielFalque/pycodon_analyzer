@@ -16,7 +16,7 @@
 {% endif %}
 <p>Download full table:
 {% if report_data.tables.gene_sequence_summary_csv_path %}
-<a href="{{ report_data.base_path_to_html_assets }}data/{{ report_data.tables.gene_sequence_summary_csv_filename }}">{{ report_data.tables.gene_sequence_summary_csv_filename }}</a>
+<a href="{{ report_data.base_path_to_html_assets }}data/{{ report_data.tables.gene_sequence_summary_csv_path_from_root }}">{{ report_data.tables.gene_sequence_summary_csv_path_from_root }}</a>
 {% else %}
     <span class="unavailable">CSV file path not available.</span>
 {% endif %}
@@ -31,8 +31,8 @@
     <p class="unavailable">Mean features per gene table is not available.</p>
 {% endif %}
 <p>Download full table:
-    {% if report_data.tables.mean_features_per_gene_csv_filename %}
-    <a href="{{ report_data.base_path_to_html_assets }}data/{{ report_data.tables.mean_features_per_gene_csv_filename }}">{{ report_data.tables.mean_features_per_gene_csv_filename }}</a>
+    {% if report_data.tables.mean_features_per_gene_csv_path_from_root %}
+    <a href="{{ report_data.base_path_to_html_assets }}data/{{ report_data.tables.mean_features_per_gene_csv_path_from_root }}">{{ report_data.tables.mean_features_per_gene_csv_path_from_root }}</a>
 {% else %}
     <span class="unavailable">CSV file path not available.</span>
 {% endif %}

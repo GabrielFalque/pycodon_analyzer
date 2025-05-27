@@ -63,7 +63,9 @@ def df_to_html_custom(df: Optional[pd.DataFrame],
 
 
 class HTMLReportGenerator:
-    def __init__(self, output_dir_root: Path, run_params: Dict[str, Any]): # output_dir_root is the main analysis output
+    def __init__(self, 
+                 output_dir_root: Path, 
+                 run_params: Dict[str, Any]): # output_dir_root is the main analysis output
         if not JINJA2_AVAILABLE: # pragma: no cover
             logger.error("Jinja2 is not installed. Cannot generate HTML report. Please install with 'pip install Jinja2'")
             raise ImportError("Jinja2 is required for HTML report generation.")
@@ -72,8 +74,6 @@ class HTMLReportGenerator:
 
         self.main_report_file_path = self.output_dir_root / "report.html"
         self.secondary_html_pages_dir = self.output_dir_root / "html"
-        self.report_img_dir = self.secondary_html_pages_dir / "images"
-        self.report_data_dir = self.secondary_html_pages_dir / "data"
 
         self.run_params = run_params
         self.template_dir = Path(__file__).parent / "templates"
@@ -120,8 +120,7 @@ class HTMLReportGenerator:
             #     shutil.rmtree(self.secondary_html_pages_dir) # Deactivated for safety
 
             self.secondary_html_pages_dir.mkdir(parents=True, exist_ok=True)
-            self.report_img_dir.mkdir(exist_ok=True)
-            self.report_data_dir.mkdir(exist_ok=True)
+
             logger.info(f"Main report file will be at: {self.main_report_file_path}")
             logger.info(f"Secondary HTML pages and assets will be in: {self.secondary_html_pages_dir}")
 
@@ -182,46 +181,15 @@ class HTMLReportGenerator:
             logger.info(f"Added 'Plots by {sanitized_metadata_col_name}' to report navigation.")
 
 
-    def _copy_and_get_relative_path(self, 
-                                    plot_abs_path: Optional[str], 
-                                    plot_category: str, 
-                                    plot_name: str, 
-                                    current_page_depth: int) -> Optional[str]:
-        """
-        Copies a plot to the report's image directory and returns its relative path
-        for use in HTML. Handles cases where the plot might not exist.
-        If plot_abs_path is None or file not found, returns placeholder or None.
-        """
-        if plot_abs_path is None or not Path(plot_abs_path).is_file():
-            logger.warning(f"Plot file not found or not specified for {plot_category} - {plot_name}. Will use placeholder or skip in report.")
-            # You could copy a standard "plot_not_available.png" to self.report_img_dir
-            # and return "images/plot_not_available.png"
-            return None # Or return "images/" + PLOT_NOT_AVAILABLE_PLACEHOLDER if you have one
-
-        try:
-            src_path = Path(plot_abs_path)
-            dest_filename_in_images_dir = src_path.name
-            dest_path_in_report_images = self.report_img_dir / dest_filename_in_images_dir
-            
-            shutil.copy(src_path, dest_path_in_report_images)
-            
-            if current_page_depth == 0: # Page is at output_dir_root (report.html)
-                relative_path_for_html = f"html/images/{dest_filename_in_images_dir}"
-            else: # Page is inside output_dir_root/html/
-                relative_path_for_html = f"images/{dest_filename_in_images_dir}"
-                logger.debug(f"Copied plot '{src_path.name}' to '{dest_path_in_report_images}'. Relative HTML path: '{relative_path_for_html}'")
-            return relative_path_for_html
-        except Exception as e: # pragma: no cover
-            logger.error(f"Could not copy plot {plot_abs_path} to report directory {self.report_img_dir}: {e}")
-            return None
-
-
     def add_summary_data(self, num_genes_processed: int, total_valid_sequences: int):
         self.report_data["summary_stats"]["num_genes_processed"] = num_genes_processed
         self.report_data["summary_stats"]["total_valid_sequences"] = total_valid_sequences
 
-    def add_table(self, table_name: str, df: Optional[pd.DataFrame], 
-                  table_id: Optional[str] = None, classes: Optional[List[str]]=None, 
+    def add_table(self, table_name: str, 
+                  df: Optional[pd.DataFrame],
+                  table_csv_path_relative_to_outdir: Optional[str],
+                  table_id: Optional[str] = None, 
+                  classes: Optional[List[str]]=None, 
                   display_in_html: bool = True, 
                   display_index: bool = False):
         """
@@ -232,79 +200,48 @@ class HTMLReportGenerator:
         # Sanitize table_name for use as a key and filename part
         sane_table_key = utils.sanitize_filename(table_name).lower().replace('-', '_')        
         
-        if df is not None and not df.empty:
-            logger.debug(f"Processing table '{table_name}' for HTML report data.")
-            
-            csv_filename = f"{sane_table_key}.csv"
-            csv_path = self.report_data_dir / csv_filename
-            try:
-                # Save the index for CA tables if it is named (eg: 'Codon') or if it is not a simple RangeIndex
-                should_save_index_csv = display_index or (df.index.name is not None) or not isinstance(df.index, pd.RangeIndex)
-                df.to_csv(csv_path, 
-                          index=should_save_index_csv, 
-                          float_format='%.5g')
-                self.report_data["tables"][f"{sane_table_key}_csv_path"] = f"data/{csv_filename}"
-                logger.info(f"Saved table {table_name} to {csv_path} for the report (index saved: {should_save_index_csv}).")
-            except Exception as e: # pragma: no cover
-                logger.error(f"Could not save CSV for table {table_name}: {e}")
-                self.report_data["tables"][f"{sane_table_key}_csv_path"] = None            
-            
-            if display_in_html:
-                self.report_data["tables"][f"{sane_table_key}_html"] = df_to_html_custom(df, 
-                                                                                         table_id, 
-                                                                                         classes, 
-                                                                                         display_index=display_index)
-            else:
-                link_path_placeholder = f"{self.secondary_html_pages_dir.name}/data/{csv_filename}" if self.report_data["tables"].get(f"{sane_table_key}_csv_filename") else "#"
-                display_link = f"data/{csv_filename}" # This is for pages inside html/ directory
-                
-                # The actual href construction needs to be smart based on page depth
-                # For now, provide the raw path and let template decide based on page_depth
-                self.report_data["tables"][f"{sane_table_key}_html"] = \
-                    f"<p>Table '{table_name}' is intentionally not displayed here. See CSV for full data: " \
-                    f"<a href='{display_link}' data-csv-filename='{csv_filename}'>data/{csv_filename}</a></p>" \
-                    if self.report_data["tables"].get(f"{sane_table_key}_csv_filename") else \
-                    f"<p>Table '{table_name}' is intentionally not displayed here. CSV link unavailable.</p>"
-            
+        if table_csv_path_relative_to_outdir:
+            # Store the path relative to output_dir_root, e.g. "data/table.csv"
+            self.report_data["tables"][f"{sane_table_key}_csv_path_from_root"] = table_csv_path_relative_to_outdir
+            # For the template we will need the simple file name too if the link is built dynamically
+            self.report_data["tables"][f"{sane_table_key}_csv_filename"] = Path(table_csv_path_relative_to_outdir).name
+            logger.info(f"Table {table_name} (CSV to {table_csv_path_relative_to_outdir}) added to the report context.")
         else:
-            logger.warning(f"DataFrame for table '{table_name}' is None or empty. It will be marked as unavailable in the report.")
-            self.report_data["tables"][f"{sane_table_key}_html"] = df_to_html_custom(None) # display_index n'est pas pertinent ici
-            self.report_data["tables"][f"{sane_table_key}_csv_path"] = None
+            self.report_data["tables"][f"{sane_table_key}_csv_path_from_root"] = None
+            self.report_data["tables"][f"{sane_table_key}_csv_filename"] = None
+            logger.warning(f"No CSV path provided for table {table_name}.")
+
+        if display_in_html:
+            if df is not None and not df.empty:
+                 self.report_data["tables"][f"{sane_table_key}_html"] = df_to_html_custom(df, table_id, classes, display_index=display_index)
+            else:
+                 self.report_data["tables"][f"{sane_table_key}_html"] = "<p class='unavailable'>Data table is not available or empty for HTML display.</p>"
+        else:
+            link_text = self.report_data["tables"].get(f"{sane_table_key}_csv_path_from_root", "CSV link unavailable")
+            self.report_data["tables"][f"{sane_table_key}_html"] = \
+                f"<p>Table '{table_name}' is intentionally not displayed here. See CSV for full data: " \
+                f"<a href='{{{{ report_data.base_path_to_root }}}}{link_text}'>{Path(link_text).name if link_text != 'CSV link unavailable' else link_text}</a></p>" \
+                if table_csv_path_relative_to_outdir else \
+                f"<p>Table '{table_name}' is intentionally not displayed here. CSV link unavailable.</p>"
+            
 
     def add_plot(self, plot_key: str, 
-                 plot_abs_path: Optional[str], 
+                 plot_path_relative_to_outdir: Optional[str], 
                  category: str = "combined_plots",
-                 plot_dict_target: Optional[Dict[str, Any]] = None,
-                 current_page_depth: int = 1 # Default to depth 1 (inside html/) for most plots
+                 plot_dict_target: Optional[Dict[str, Any]] = None
                 ):
         """
         Adds a plot by copying it and storing its relative path, adjusted for page depth.
         """
-        copied_filename: Optional[str] = None
-        if plot_abs_path is not None and Path(plot_abs_path).is_file():
-            try:
-                src_path = Path(plot_abs_path)
-                dest_filename = src_path.name
-                # self.report_img_dir is output_root/html/images/
-                dest_path_in_report_img_dir = self.report_img_dir / dest_filename
-                shutil.copy(src_path, dest_path_in_report_img_dir)
-                copied_filename = dest_filename
-                logger.debug(f"Copied plot '{src_path.name}' to '{dest_path_in_report_img_dir}'.")
-            except Exception as e: # pragma: no cover
-                logger.error(f"Could not copy plot {plot_abs_path} to {self.report_img_dir}: {e}")
+        if plot_path_relative_to_outdir:
+            logger.debug(f"Adding plot '{plot_key}' to report with relative path (from output_dir_root): '{plot_path_relative_to_outdir}'")        
         else:
-            logger.warning(f"Plot file not found or not specified for {category} - {plot_key}.")
-
-        # Path to be stored in report_data, always relative to output_dir_root
-        stored_path: Optional[str] = None
-        if copied_filename:
-            stored_path = f"{self.secondary_html_pages_dir.name}/images/{copied_filename}"
-            # e.g. "html/images/myplot.png"
+            logger.warning(f"No plot path provided for {category} - {plot_key}.")
 
         target_dict = plot_dict_target
         if target_dict is None:
             target_dict = self.report_data["plot_paths"].setdefault(category, {})
-        target_dict[plot_key] = stored_path
+        target_dict[plot_key] = plot_path_relative_to_outdir # Can be None
 
     def generate_report(self):
         if not JINJA2_AVAILABLE: # pragma: no cover
@@ -325,35 +262,22 @@ class HTMLReportGenerator:
         for page_info in self.pages_to_generate:
             try:
                 template = self.env.get_template(page_info["template"])
-                
-                # Determine base path for relative links in this page
-                # This path is from the current HTML file to the output_dir_root
                 current_page_depth = page_info.get("depth", 0)
-                base_path_to_root = "../" * current_page_depth
-                self.report_data["base_path_to_root"] = base_path_to_root
+                self.report_data["base_path_to_root"] = "../" * current_page_depth
                 
-                # Specific base path for assets (images, data) which are under "html/"
-                # If current page is at root (depth 0), path to assets is "html/"
-                # If current page is in "html/" (depth 1), path to assets is "" (already in correct relative scope)
-                self.report_data["base_path_to_html_assets"] = "html/" if current_page_depth == 0 else ""
-
-
                 html_content = template.render(
-                    report_data=self.report_data, # Contains all data including plot paths relative to root
-                    navigation_items=self.report_data["navigation_items"], # URLs are relative to root
+                    report_data=self.report_data,
+                    navigation_items=self.report_data["navigation_items"],
                     active_page=page_info["page_id"]
                 )
                 
-                # Determine full output path for the HTML file
-                # page_info["output_file"] is already "report.html" or "html/secondary.html"
                 full_output_path = self.output_dir_root / page_info["output_file"]
-                
-                # Ensure parent directory exists for secondary pages
                 full_output_path.parent.mkdir(parents=True, exist_ok=True)
 
                 with open(full_output_path, "w", encoding="utf-8") as f:
                     f.write(html_content)
                 logger.info(f"Generated report page: {full_output_path}")
+                
             except TemplateNotFound: # pragma: no cover
                  logger.error(f"HTML template not found: {page_info['template']}. Skipping page '{page_info['output_file']}'.")
             except Exception as e: # pragma: no cover
