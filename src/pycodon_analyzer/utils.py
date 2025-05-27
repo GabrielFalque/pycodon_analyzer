@@ -498,9 +498,9 @@ def clean_and_filter_sequences(
         try:
             # Ensure record has necessary attributes
             if not isinstance(record, SeqRecord) or not hasattr(record, 'seq') or not hasattr(record, 'id'):
-                 logger.warning(f"Skipping invalid/incomplete record object: {record}")
-                 removed_count += 1
-                 continue
+                # logger.warning(f"Skipping invalid/incomplete record object: {record}")
+                removed_count += 1
+                continue
 
             seq_id: str = record.id
             original_seq_str: str = str(record.seq)
@@ -508,13 +508,13 @@ def clean_and_filter_sequences(
             # 1. Remove gaps
             gapless_seq: str = original_seq_str.replace('-', '')
             if not gapless_seq:
-                logger.debug(f"Seq {seq_id} removed (empty after gap removal).")
+                # logger.debug(f"Seq {seq_id} removed (empty after gap removal).")
                 removed_count += 1
                 continue
 
             # 2. Check length multiple of 3
             if len(gapless_seq) % 3 != 0:
-                logger.debug(f"Seq {seq_id} removed (length {len(gapless_seq)} not multiple of 3 after gap removal).")
+                # logger.debug(f"Seq {seq_id} removed (length {len(gapless_seq)} not multiple of 3 after gap removal).")
                 removed_count += 1
                 continue
 
@@ -524,16 +524,16 @@ def clean_and_filter_sequences(
             # 3. Check and remove START codon (only if present at the very beginning)
             if len_before_trim >= 3 and seq_to_process.startswith(tuple(STANDARD_START_CODONS)):
                 seq_to_process = seq_to_process[3:]
-                logger.debug(f"Removed standard START codon from Seq {seq_id}")
+                # logger.debug(f"Removed standard START codon from Seq {seq_id}")
 
             # 4. Check and remove STOP codon (only if present at the very end)
             if len(seq_to_process) >= 3 and seq_to_process.endswith(tuple(STANDARD_STOP_CODONS)):
                 seq_to_process = seq_to_process[:-3]
-                logger.debug(f"Removed standard STOP codon from Seq {seq_id}")
+                # logger.debug(f"Removed standard STOP codon from Seq {seq_id}")
 
             # Check length again after potential trimming (must be >= 1 codon and multiple of 3)
             if not seq_to_process or len(seq_to_process) % 3 != 0:
-                logger.debug(f"Seq {seq_id} removed (length {len(seq_to_process)} invalid after start/stop trim).")
+                # logger.debug(f"Seq {seq_id} removed (length {len(seq_to_process)} invalid after start/stop trim).")
                 removed_count += 1
                 continue
 
@@ -547,7 +547,7 @@ def clean_and_filter_sequences(
 
             # 7. Filter based on ambiguity
             if ambiguity_pct > max_ambiguity_pct:
-                logger.debug(f"Seq {seq_id} removed (ambiguity {ambiguity_pct:.1f}% > {max_ambiguity_pct}%).")
+                # logger.debug(f"Seq {seq_id} removed (ambiguity {ambiguity_pct:.1f}% > {max_ambiguity_pct}%).")
                 removed_count += 1
                 continue
 
