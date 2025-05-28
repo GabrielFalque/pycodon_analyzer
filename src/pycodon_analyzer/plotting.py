@@ -25,28 +25,35 @@ try:
     from matplotlib.figure import Figure # For type hinting
     from matplotlib.collections import PathCollection # For type hinting scatter plot object
     from matplotlib.text import Text as MatplotlibText # For type hinting plt.Text
-
+    MATPLOTLIB_AVAILABLE = True
 except ImportError:
     # Critical dependency, log and exit might be too late if logger not set.
     print("CRITICAL ERROR: matplotlib is required but not installed. Please install it (`pip install matplotlib`).", file=sys.stderr)
+    MATPLOTLIB_AVAILABLE = False
     sys.exit(1)
 
 try:
     import seaborn as sns
+    SNS_AVAILABLE = True
 except ImportError:
     print("CRITICAL ERROR: seaborn is required but not installed. Please install it (`pip install seaborn`).", file=sys.stderr)
+    SNS_AVAILABLE = False
     sys.exit(1)
 
 try:
     import pandas as pd
+    PANDAS_AVAILABLE = True
 except ImportError:
     print("CRITICAL ERROR: pandas is required but not installed. Please install it (`pip install pandas`).", file=sys.stderr)
+    PANDAS_AVAILABLE = False
     sys.exit(1)
 
 try:
     import numpy as np
+    NUMPY_AVAILABLE = True
 except ImportError:
     print("CRITICAL ERROR: numpy is required but not installed. Please install it (`pip install numpy`).", file=sys.stderr)
+    NUMPY_AVAILABLE = False
     sys.exit(1)
 
 if TYPE_CHECKING:
@@ -65,17 +72,21 @@ if TYPE_CHECKING:
     import prince
     PrinceCA = prince.CA
     from scipy import stats as scipy_stats_module # For type hints
+    PRINCE_AVAILABLE = True
 else:
     PrinceCA = Any
     try:
         import prince
+        PRINCE_AVAILABLE = True
     except ImportError:
+        PRINCE_AVAILABLE = False
         prince = None
     try:
         from scipy import stats as scipy_stats_module
     except ImportError:
         scipy_stats_module = None
 
+# Import adjustText and set ADJUSTTEXT_AVAILABLE
 try:
     from adjustText import adjust_text
     ADJUSTTEXT_AVAILABLE = True
@@ -459,11 +470,11 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
         ax.tick_params(axis='both', which='major', labelsize=10)
 
         # --- Add Adjusted Group Labels ---
-        if hue_column_actual and ADJUSTTEXT_AVAILABLE: 
-            texts: List[MatplotlibText] = [] 
+        if hue_column_actual:
+            texts: List[MatplotlibText] = []
             group_data_iter = plot_df_valid.groupby(hue_column_actual) # group_data renamed to group_data_iter
-            for name, group_df in group_data_iter: 
-                if not group_df.empty: 
+            for name, group_df in group_data_iter:
+                if not group_df.empty:
                     mean_x, mean_y = group_df['GC3_num'].mean(), group_df['GC12_num'].mean()
                     text_color_val = palette.get(name, 'darkgrey') if palette and isinstance(palette, dict) else 'darkgrey' # group_color renamed text_color_val
                     txt = ax.text(mean_x, mean_y, str(name), fontsize=8, alpha=0.9, color=text_color_val,
@@ -471,15 +482,16 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
                                   bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
                     texts.append(txt)
             if texts:
-                try:
-                    adjust_text(texts, ax=ax, add_objects=[scatter_plot_object] if scatter_plot_object else [],
-                                arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6),
-                                force_points=(0.6, 0.8), force_text=(0.4, 0.6), expand_points=(1.3, 1.3))
-                except Exception as adj_err:
-                    logger.warning(f"{plot_title_prefix}adjustText failed for Neutrality Plot labels: {adj_err}. Labels might overlap.")
-        elif hue_column_actual and not ADJUSTTEXT_AVAILABLE:
-             logger.info(f"{plot_title_prefix}adjustText not installed. Group labels on Neutrality Plot may overlap.")
-        
+                if ADJUSTTEXT_AVAILABLE: # Check availability
+                    try:
+                        adjust_text(texts, ax=ax, add_objects=[scatter_plot_object] if scatter_plot_object else [],
+                                    arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6),
+                                    force_points=(0.6, 0.8), force_text=(0.4, 0.6), expand_points=(1.3, 1.3))
+                    except Exception as adj_err:
+                        logger.warning(f"{plot_title_prefix}adjustText failed for Neutrality Plot labels: {adj_err}. Labels might overlap.")
+                else: # Log if not available
+                    logger.info(f"{plot_title_prefix}adjustText library not installed. Group labels on Neutrality Plot may overlap.")
+
         # Legend handling
         handles, plot_labels = ax.get_legend_handles_labels()
         if handles:
@@ -600,7 +612,7 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
         
         # --- Add Adjusted Groups Labels ---
         # Text labels for groups (e.g., mean point of each group)
-        if hue_column_actual and ADJUSTTEXT_AVAILABLE:
+        if hue_column_actual:
             texts: List[MatplotlibText] = [] # Use the imported MatplotlibText
             # Ensure palette is a dictionary if used for specific colors
             # Or seaborn handles it if palette is a name like "husl"
@@ -623,13 +635,15 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
                                   bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
                     texts.append(txt)
             if texts:
-                try:
-                    adjust_text(texts, ax=ax, add_objects=[scatter_plot_object] if scatter_plot_object else [],
-                                arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6),
-                                force_points=(0.6,0.8), force_text=(0.4,0.6), expand_points=(1.3,1.3))
-                except Exception as adj_err: logger.warning(f"adjustText failed for ENC vs GC3 labels: {adj_err}.")
-        elif hue_column_actual and not ADJUSTTEXT_AVAILABLE:
-            logger.info("adjustText not installed. Group labels on ENC vs GC3 plot may overlap.")
+                if ADJUSTTEXT_AVAILABLE: # Check availability
+                    try:
+                        adjust_text(texts, ax=ax, add_objects=[scatter_plot_object] if scatter_plot_object else [],
+                                    arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6),
+                                    force_points=(0.6,0.8), force_text=(0.4,0.6), expand_points=(1.3,1.3))
+                    except Exception as adj_err:
+                        logger.warning(f"adjustText failed for ENC vs GC3 labels: {adj_err}.")
+                else: # Log if not available
+                    logger.info("adjustText library not installed. Group labels on ENC vs GC3 plot may overlap.")
 
         # Legend handling
         handles, labels = ax.get_legend_handles_labels()
@@ -1082,39 +1096,47 @@ def plot_ca(
                 texts_col_labels: List[MatplotlibText] = []
                 for idx, txt_val in enumerate(col_coords.index):
                      texts_col_labels.append(ax.text(col_coords.iloc[idx, comp_x], col_coords.iloc[idx, comp_y], txt_val, fontsize=7, color='darkred', alpha=0.8))
-                if ADJUSTTEXT_AVAILABLE and texts_col_labels:
+                if ADJUSTTEXT_AVAILABLE and texts_col_labels: # MODIFIED: Check availability
                     try: adjust_text(texts_col_labels, ax=ax, arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.5))
                     except Exception as adj_err_col: logger.warning(f"adjustText for CA column labels failed: {adj_err_col}")
+                # ADDED: Log if adjustText not available for column labels
+                elif not ADJUSTTEXT_AVAILABLE and texts_col_labels:
+                    logger.info(f"{plot_title_prefix}adjustText library not installed. CA column labels may overlap.")
+                # END ADDED
         """
 
         # Add Adjusted Row Labels (if hueing by groups)
-        if perform_hueing and groups_for_hue is not None and row_coords is not None and ADJUSTTEXT_AVAILABLE:
+        # Encapsulate adjust_text usage for row labels
+        if perform_hueing and groups_for_hue is not None and row_coords is not None:
             texts_row_labels: List[MatplotlibText] = []
             # Use plot_data_rows which has the hue column
-            temp_label_df_ca = plot_data_rows.copy()
-            # If plot_data_rows does not have the hue_col_name (e.g. legend_title), it needs to be added from groups_for_hue
-            # This should be correct now as plot_data_rows has the hue column
-            
-            group_data_ca_iter = temp_label_df_ca.groupby(legend_title)
+            temp_label_df_ca = plot_data_rows.copy() # plot_data_rows already created if perform_hueing is True
+
+            group_data_ca_iter = temp_label_df_ca.groupby(legend_title) # Use legend_title as it's the actual hue column name in plot_data_rows
             for name_val, group_df_ca in group_data_ca_iter:
                 if not group_df_ca.empty:
                     mean_x_ca, mean_y_ca = group_df_ca[comp_x].mean(), group_df_ca[comp_y].mean()
                     text_color_ca = palette.get(name_val, 'darkgrey') if palette and isinstance(palette, dict) else 'darkgrey'
-                    txt_obj = ax.text(mean_x_ca, mean_y_ca, str(name_val), fontsize=8, alpha=0.9, color=text_color_ca,
-                                  ha='center', va='center', bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
+                    txt_obj = ax.text(mean_x_ca, mean_y_ca, 
+                                      str(name_val), fontsize=8, alpha=0.9, 
+                                      color=text_color_ca,
+                                      ha='center', va='center', 
+                                      bbox=dict(boxstyle='round,pad=0.2', 
+                                                fc='white', ec='none', alpha=0.7))
                     texts_row_labels.append(txt_obj)
             if texts_row_labels:
-                try:
-                    adjust_text(texts_row_labels, ax=ax, 
-                                add_objects=[row_scatter_object] if row_scatter_object else [],
-                                arrowprops=dict(arrowstyle='-', color='gray', 
-                                                lw=0.5, alpha=0.6),
-                                force_points=(0.7, 0.9), force_text=(0.6, 0.8), 
-                                expand_points=(1.3,1.3))
-                except Exception as adj_err_row: 
-                    logger.warning(f"{plot_title_prefix}adjustText for CA row group labels failed: {adj_err_row}.")
-        elif perform_hueing and not ADJUSTTEXT_AVAILABLE:
-            logger.info(f"{plot_title_prefix}adjustText not installed. CA row group labels may overlap.")
+                if ADJUSTTEXT_AVAILABLE: # Check availability
+                    try:
+                        adjust_text(texts_row_labels, ax=ax,
+                                    add_objects=[row_scatter_object] if row_scatter_object else [],
+                                    arrowprops=dict(arrowstyle='-', color='gray',
+                                                    lw=0.5, alpha=0.6),
+                                    force_points=(0.7, 0.9), force_text=(0.6, 0.8),
+                                    expand_points=(1.3,1.3))
+                    except Exception as adj_err_row:
+                        logger.warning(f"{plot_title_prefix}adjustText for CA row group labels failed: {adj_err_row}.")
+                else: # Log if not available
+                    logger.info(f"{plot_title_prefix}adjustText library not installed. CA row group labels may overlap.")
 
         # Customizations
         plot_main_title = f'{plot_title_prefix}Correspondence Analysis (Components {comp_x+1} & {comp_y+1})'
