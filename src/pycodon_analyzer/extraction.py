@@ -21,6 +21,8 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
+from . import utils # For sanitize_filename
+
 logger = logging.getLogger(__name__)
 
 # --- Annotation Parsing Functions (from extract_genes_aln.py) ---
@@ -186,16 +188,6 @@ def map_coordinates_to_alignment_for_extraction(
     logger.info(f"Coordinate mapping done: Mapped: {len(mapped_genes_info)}, Skipped (outside): {skipped_outside}, Skipped (mapping issue): {skipped_mapping}.")
     return mapped_genes_info
 
-# --- Sanitization Function (can be moved to utils if preferred and imported here) ---
-def _sanitize_filename_for_extraction(name: str) -> str:
-    """Sanitizes a gene name to be filesystem-safe for extraction output."""
-    name = re.sub(r'[\[\]()/:\\\'"]', '', name)
-    name = name.replace(' ', '_')
-    name = re.sub(r'[^\w\-.]', '', name)
-    if name.startswith('.') or name.startswith('-'): name = '_' + name
-    return name if name else "unnamed_gene"
-
-
 # --- Main Orchestration Function for 'extract' subcommand ---
 def extract_gene_alignments_from_genome_msa(
     annotations_path: Path,
@@ -253,7 +245,7 @@ def extract_gene_alignments_from_genome_msa(
     genes_written = 0; genes_failed = 0; genes_skipped_extraction = 0
     for gene_info in aligned_genes_info:
         gene_name = gene_info['GeneName']
-        safe_gene_name = _sanitize_filename_for_extraction(gene_name) # Use local sanitize
+        safe_gene_name = utils.sanitize_filename(gene_name)        
         output_filename = output_dir / f"gene_{safe_gene_name}.fasta"
         logger.debug(f"Processing {gene_name} -> {output_filename} ...")
 
