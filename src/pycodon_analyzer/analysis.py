@@ -7,32 +7,52 @@
 
 """
 Core analysis functions for codon usage and sequence properties.
+
+This module provides comprehensive functionality for analyzing DNA sequences,
+including nucleotide composition, codon usage bias metrics, protein properties,
+and statistical comparisons between gene sets. It supports both aggregate and
+per-sequence analyses with robust error handling.
+
+Key features:
+- Nucleotide and dinucleotide frequency calculations
+- GC content analysis (overall and position-specific)
+- Codon usage indices (RSCU, ENC, CAI, Fop, RCDI)
+- Protein property calculations (GRAVY, aromaticity)
+- Statistical comparisons between gene groups
+- Correspondence Analysis (CA) for multivariate analysis
 """
+# Standard library imports
 import itertools
 import os
 import sys
-import logging # <-- Import logging
-import math # For log, exp in CAI, etc.
+import logging
+import math
+import warnings
 from collections import Counter
 from typing import List, Dict, Optional, Set, Tuple, Any, Union, TYPE_CHECKING
-import warnings
+from functools import partial
+
+# Third-party imports
 import pandas as pd
 import numpy as np
 from Bio.SeqRecord import SeqRecord
 from Bio.Seq import Seq
-from Bio.SeqUtils import GC123, molecular_weight # type: ignore # Use BioPython's GC utils
-from Bio.SeqUtils.ProtParam import ProteinAnalysis # type: ignore # For GRAVY, Aromaticity
+from Bio.SeqUtils import GC123, molecular_weight  # type: ignore # Use BioPython's GC utils
+from Bio.SeqUtils.ProtParam import ProteinAnalysis  # type: ignore # For GRAVY, Aromaticity
 
 # Import prince for CA - handle optional dependency for typing
 if TYPE_CHECKING:
     import prince # Import only for type checking
     PrinceCA = prince.CA # Actual type for type checker
+    PRINCE_AVAILABLE = True
 else:
     PrinceCA = Any # Fallback type for runtime if prince not installed
     try:
         import prince # Try to import at runtime for actual use
+        PRINCE_AVAILABLE = True
     except ImportError:
         prince = None # Set to None if not found
+        PRINCE_AVAILABLE = False
 
 # Import scipy.stats - handle optional dependency for typing
 if TYPE_CHECKING:
@@ -47,12 +67,10 @@ else:
     except ImportError:
         scipy_stats_module = None # Set to None if not found
 
-from functools import partial
-
 # --- Configure logging for this module ---
 logger = logging.getLogger(__name__)
 
-# --- Local modules ---
+# --- Local modules import with robust error handling ---
 try:
     from .utils import (get_genetic_code, get_synonymous_codons,
                         VALID_CODON_CHARS, KYTE_DOOLITTLE_HYDROPATHY)
@@ -73,9 +91,9 @@ except ImportError as e:
     # raise e # Or sys.exit("Core utilities could not be imported in analysis module.")
 
 
-
-
-# === Nucleotide and Dinucleotide Frequency Calculations ===
+# ============================================================================
+# === NUCLEOTIDE AND DINUCLEOTIDE FREQUENCY CALCULATIONS =====================
+# ============================================================================
 
 def calculate_relative_dinucleotide_abundance(
     nucl_freqs: Dict[str, float],
@@ -83,8 +101,12 @@ def calculate_relative_dinucleotide_abundance(
 ) -> Dict[str, float]:
     """
     Calculates the relative dinucleotide abundance (Observed/Expected ratio).
+    
+    This metric quantifies whether specific dinucleotides appear more or less frequently
+    than would be expected by chance, given the individual nucleotide frequencies.
+    Values > 1 indicate over-representation, while values < 1 indicate under-representation.
 
-    Expected frequency Exp(XY) = Freq(X) * Freq(Y).
+    Formula: O/E ratio = Observed(XY) / Expected(XY), where Expected(XY) = Freq(X) * Freq(Y)
 
     Args:
         nucl_freqs (Dict[str, float]): Dictionary mapping nucleotides ('A', 'C', 'G', 'T')
@@ -257,7 +279,7 @@ def calculate_per_sequence_dinucleotide_frequencies(
     if not sequences:
         logger.debug("calculate_per_sequence_dinucleotide_frequencies: Received empty sequence list.")
         return per_seq_freqs
-        
+
     bases = 'ACGT'
     all_dinucl_keys = [d1 + d2 for d1 in bases for d2 in bases]
 
@@ -279,8 +301,11 @@ def calculate_per_sequence_dinucleotide_frequencies(
     logger.debug("Finished calculating per-sequence dinucleotide frequencies.")
     return per_seq_freqs
 
+# ============================================================================
+# === CODON AND SEQUENCE PROPERTY CALCULATIONS ===============================
+# ============================================================================
 
-# === Codon and Sequence Property Calculations ===
+
 
 # Type alias for the return tuple of calculate_gc_content
 GcContentType = Tuple[float, float, float, float, float]
@@ -288,7 +313,13 @@ GcContentType = Tuple[float, float, float, float, float]
 def calculate_gc_content(sequence_str: str) -> GcContentType:
     """
     Calculates GC, GC1, GC2, GC3, GC12 content for a single DNA sequence string.
-    Uses Bio.SeqUtils.GC123. Assumes input is cleaned (ATCG, no gaps, multiple of 3).
+    
+    This function computes the percentage of G+C bases in the entire sequence (GC),
+    at each codon position (GC1, GC2, GC3), and the average of positions 1 and 2 (GC12).
+    These metrics are important indicators of genomic composition and codon usage bias.
+    
+    Handles ambiguous bases 'S' (G or C) and 'W' (A or T) correctly.
+    Other ambiguous bases and gaps are ignored in the calculations.
 
     Args:
         sequence_str (str): The DNA sequence string.
@@ -297,46 +328,181 @@ def calculate_gc_content(sequence_str: str) -> GcContentType:
         GcContentType: Tuple (GC, GC1, GC2, GC3, GC12) as percentages (float).
                        Returns NaNs if calculation is not possible.
     """
-    # Basic validation of input
-    if not sequence_str or len(sequence_str) < 3 or len(sequence_str) % 3 != 0:
-         logger.debug(f"Cannot calculate GC content for sequence of length {len(sequence_str)}. Needs multiple of 3.")
-         return (np.nan,) * 5 # Return tuple of NaNs
-
-    try:
-        # GC123 expects string, returns percentages
-        gc1, gc2, gc3, gc_overall = GC123(sequence_str)
-
-        # Ensure results are numeric before calculating GC12
-        gc1_f = float(gc1) if pd.notna(gc1) else np.nan
-        gc2_f = float(gc2) if pd.notna(gc2) else np.nan
-        gc3_f = float(gc3) if pd.notna(gc3) else np.nan
-        gc_overall_f = float(gc_overall) if pd.notna(gc_overall) else np.nan
-
-        gc12: float = np.nan
-        if not np.isnan(gc1_f) and not np.isnan(gc2_f):
-             gc12 = (gc1_f + gc2_f) / 2.0
-
-        return (gc_overall_f, gc1_f, gc2_f, gc3_f, gc12)
-
-    except (ZeroDivisionError, ValueError, TypeError) as e:
-         # Catch specific errors during GC123 calculation
-         logger.warning(f"Could not calculate GC123 content for sequence (len {len(sequence_str)}): {e}. Returning NaNs.")
-         return (np.nan,) * 5
-    except Exception as e: # Catch any other unexpected error
-        logger.exception(f"Unexpected error in calculate_gc_content for sequence (len {len(sequence_str)}): {e}")
+    # Custom handling for empty sequence and logging
+    if not sequence_str:
+        logger.warning("Empty sequence provided for GC content calculation. Returning NaNs.")
         return (np.nan,) * 5
+
+    # Custom GC calculation to handle 'S' and 'W' as per test expectations
+    gc_count = 0
+    at_count = 0
+    total_valid_bases = 0
+
+    for base in sequence_str.upper():
+        if base in 'GC':
+            gc_count += 1
+            total_valid_bases += 1
+        elif base == 'S': # 'S' is G or C (Strong)
+            gc_count += 1
+            total_valid_bases += 1
+        elif base in 'AT':
+            at_count += 1
+            total_valid_bases += 1
+        elif base == 'W': # 'W' is A or T (Weak)
+            at_count += 1
+            total_valid_bases += 1
+        # Other ambiguous bases (N, R, Y, K, M, B, D, H, V) and gaps (-) are ignored.
+
+    gc_overall = (gc_count / total_valid_bases * 100.0) if total_valid_bases > 0 else 0.0
+
+    # For GC1, GC2, GC3, we need to iterate through codons.
+    gc1_count, gc2_count, gc3_count = 0, 0, 0
+    len1_count, len2_count, len3_count = 0, 0, 0
+
+    # Only consider full codons for positional GC
+    num_full_codons = len(sequence_str) // 3
+    if num_full_codons == 0:
+        logger.debug(f"Sequence length {len(sequence_str)} is too short for positional GC content calculation. Returning NaNs for positional GC.")
+        return (gc_overall, np.nan, np.nan, np.nan, np.nan)
+
+    for i in range(num_full_codons):
+        codon = sequence_str[i*3 : i*3 + 3].upper()
+        
+        # Position 1
+        base1 = codon[0]
+        if base1 in 'GC':
+            gc1_count += 1
+            len1_count += 1
+        elif base1 == 'S':
+            gc1_count += 1
+            len1_count += 1
+        elif base1 in 'ATW':
+            len1_count += 1
+
+        # Position 2
+        base2 = codon[1]
+        if base2 in 'GC':
+            gc2_count += 1
+            len2_count += 1
+        elif base2 == 'S':
+            gc2_count += 1
+            len2_count += 1
+        elif base2 in 'ATW':
+            len2_count += 1
+
+        # Position 3
+        base3 = codon[2]
+        if base3 in 'GC':
+            gc3_count += 1
+            len3_count += 1
+        elif base3 == 'S':
+            gc3_count += 1
+            len3_count += 1
+        elif base3 in 'ATW':
+            len3_count += 1
+
+    gc1 = (gc1_count / len1_count * 100.0) if len1_count > 0 else np.nan
+    gc2 = (gc2_count / len2_count * 100.0) if len2_count > 0 else np.nan
+    gc3 = (gc3_count / len3_count * 100.0) if len3_count > 0 else np.nan
+    
+    gc12 = (gc1 + gc2) / 2.0 if pd.notna(gc1) and pd.notna(gc2) else np.nan
+
+    return (gc_overall, gc1, gc2, gc3, gc12)
+
+def calculate_gc_at_positions(sequence_str: str) -> Tuple[float, float, float, float]:
+    """
+    Calculates GC content at each codon position (GC1, GC2, GC3) and overall GC content.
+    Handles incomplete codons by only considering full codons.
+    Ambiguous bases 'S' (G or C) are counted as GC. Other ambiguous bases and gaps are ignored.
+
+    Args:
+        sequence_str (str): The DNA sequence string.
+
+    Returns:
+        Tuple[float, float, float, float]: (GC1, GC2, GC3, Overall GC) as fractions (0.0-1.0).
+                                            Returns NaNs if calculation is not possible.
+    """
+    if not sequence_str:
+        logger.warning("Empty sequence provided for GC content at positions calculation. Returning NaNs.")
+        return (np.nan, np.nan, np.nan, np.nan)
+
+    gc1_count, gc2_count, gc3_count = 0, 0, 0
+    len1_count, len2_count, len3_count = 0, 0, 0
+    overall_gc_count, overall_total_bases = 0, 0
+
+    num_full_codons = len(sequence_str) // 3
+    if num_full_codons == 0:
+        logger.debug(f"Sequence length {len(sequence_str)} is too short for positional GC content calculation. No full codons.")
+        # For overall GC, if no full codons, still calculate based on all valid bases
+        for base in sequence_str.upper():
+            if base in 'GC':
+                overall_gc_count += 1
+                overall_total_bases += 1
+            elif base == 'S':
+                overall_gc_count += 1
+                overall_total_bases += 1
+            elif base in 'ATW':
+                overall_total_bases += 1
+        overall_gc = (overall_gc_count / overall_total_bases) if overall_total_bases > 0 else 0.0
+        return (np.nan, np.nan, np.nan, overall_gc)
+
+
+    logger.debug(f"Sequence length {len(sequence_str)} is not a multiple of 3. Analyzing {num_full_codons} full codons.")
+
+    for i in range(num_full_codons):
+        codon = sequence_str[i*3 : i*3 + 3].upper()
+        
+        # Positional counts
+        for pos_idx, base in enumerate(codon):
+            if base in 'GC':
+                if pos_idx == 0: gc1_count += 1
+                elif pos_idx == 1: gc2_count += 1
+                else: gc3_count += 1
+            elif base == 'S': # 'S' is G or C
+                if pos_idx == 0: gc1_count += 1
+                elif pos_idx == 1: gc2_count += 1
+                else: gc3_count += 1
+            
+            # Count valid bases for denominator for each position
+            if base in 'ATGCW S': # All standard and ambiguous that are counted for length
+                if pos_idx == 0: len1_count += 1
+                elif pos_idx == 1: len2_count += 1
+                else: len3_count += 1
+
+        # Overall GC count for the *full codons*
+        for base in codon:
+            if base in 'GC':
+                overall_gc_count += 1
+                overall_total_bases += 1
+            elif base == 'S':
+                overall_gc_count += 1
+                overall_total_bases += 1
+            elif base in 'ATW':
+                overall_total_bases += 1
+
+    gc1 = (gc1_count / len1_count) if len1_count > 0 else np.nan
+    gc2 = (gc2_count / len2_count) if len2_count > 0 else np.nan
+    gc3 = (gc3_count / len3_count) if len3_count > 0 else np.nan
+    overall_gc = (overall_gc_count / overall_total_bases) if overall_total_bases > 0 else np.nan
+
+    return (gc1, gc2, gc3, overall_gc)
 
 
 def translate_sequence(sequence_str: str, genetic_code: Dict[str, str]) -> Optional[str]:
     """
-    Translates a cleaned DNA sequence string (assumed multiple of 3) into protein sequence.
+    Translates a cleaned DNA sequence string into protein sequence.
+    
+    This function converts DNA codons to amino acids using the provided genetic code.
+    It handles incomplete codons by only translating full triplets and uses 'X' for
+    codons not found in the genetic code (e.g., those containing ambiguous bases).
 
     Args:
         sequence_str (str): The DNA sequence string.
         genetic_code (Dict[str, str]): Genetic code dictionary mapping codons to amino acids.
 
     Returns:
-        Optional[str]: Protein sequence string (may include '*' or 'X'), or None if input is empty.
+        Optional[str]: Protein sequence string (may include '*' for stop codons or 'X' for
+                      unknown/ambiguous amino acids), or None if input is empty or translation fails.
     """
     if not sequence_str:
         return None
@@ -365,13 +531,21 @@ ProteinPropType = Tuple[float, float]
 def calculate_protein_properties(protein_sequence: Optional[str]) -> ProteinPropType:
     """
     Calculates GRAVY and Aromaticity for a protein sequence string.
-    Handles None input, stop codons ('*'), and unknown AAs ('X', '?').
+    
+    GRAVY (Grand Average of Hydropathy) indicates the solubility of proteins:
+    - Positive values indicate hydrophobicity (water-repelling)
+    - Negative values indicate hydrophilicity (water-attracting)
+    
+    Aromaticity is the relative frequency of aromatic amino acids (Phe, Trp, Tyr).
+    
+    This function handles None input, stop codons ('*'), and unknown AAs ('X', '?')
+    by removing them before analysis.
 
     Args:
         protein_sequence (Optional[str]): The protein sequence string.
 
     Returns:
-        ProteinPropType: Tuple (GRAVY, Aromaticity) as floats, or (NaN, NaN).
+        ProteinPropType: Tuple (GRAVY, Aromaticity) as floats, or (NaN, NaN) if calculation fails.
     """
     if protein_sequence is None or not isinstance(protein_sequence, str) or not protein_sequence:
         return (np.nan, np.nan)
@@ -414,7 +588,9 @@ def calculate_protein_properties(protein_sequence: Optional[str]) -> ProteinProp
         return (np.nan, np.nan)
 
 
-# === Codon Usage Indices ===
+# ============================================================================
+# === CODON USAGE INDICES ===================================================
+# ============================================================================
 
 def calculate_rscu(codon_counts_df: pd.DataFrame, genetic_code_id: int = 1) -> pd.DataFrame:
     """
@@ -558,6 +734,16 @@ def calculate_rscu(codon_counts_df: pd.DataFrame, genetic_code_id: int = 1) -> p
 def calculate_enc(codon_counts: Union[Dict[str, int], Counter[str]], genetic_code_id: int = 1) -> float:
     """
     Calculates the Effective Number of Codons (ENC) using Wright's formula.
+    
+    ENC quantifies the degree of codon usage bias in a gene or genome, ranging from 20
+    (extreme bias, only one codon used per amino acid) to 61 (no bias, all synonymous
+    codons used equally). Lower values indicate stronger codon usage bias.
+    
+    The calculation is based on homozygosity (F) values for each synonymous family size
+    (2, 3, 4, or 6 codons per amino acid).
+    
+    Formula: ENC = 2 + 9/F₂ + 1/F₃ + 5/F₄ + 3/F₆
+    where F₂, F₃, F₄, F₆ are the average homozygosity values for each family size.
 
     Args:
         codon_counts (Union[Dict[str, int], Counter[str]]): Codon counts for the sequence.
@@ -565,6 +751,7 @@ def calculate_enc(codon_counts: Union[Dict[str, int], Counter[str]], genetic_cod
 
     Returns:
         float: ENC value, or np.nan if insufficient data or calculation fails.
+              Valid ENC values range from 20 to 61.
     """
     if not codon_counts: return np.nan
 
@@ -656,6 +843,16 @@ def calculate_enc(codon_counts: Union[Dict[str, int], Counter[str]], genetic_cod
 def calculate_cai(codon_counts: Union[Dict[str, int], Counter[str]], reference_weights: Dict[str, float]) -> float:
     """
     Calculates the Codon Adaptation Index (CAI).
+    
+    CAI measures how well a gene's codon usage matches that of highly expressed genes
+    in the same organism. It ranges from 0 to 1, with higher values indicating stronger
+    adaptation to the preferred codon usage pattern of the reference set.
+    
+    Formula: CAI = (∏ wᵢ)^(1/L)
+    where wᵢ is the relative adaptiveness value of the ith codon, and L is the total
+    number of codons in the sequence.
+    
+    The calculation uses the geometric mean of the weights for all codons in the sequence.
 
     Args:
         codon_counts (Union[Dict[str, int], Counter[str]]): Codon counts for the sequence.
@@ -664,6 +861,7 @@ def calculate_cai(codon_counts: Union[Dict[str, int], Counter[str]], reference_w
 
     Returns:
         float: CAI value (geometric mean of weights), or np.nan if calculation fails.
+               Valid CAI values range from 0 to 1.
     """
     # Check inputs
     if not reference_weights or not codon_counts:
@@ -720,14 +918,25 @@ def calculate_cai(codon_counts: Union[Dict[str, int], Counter[str]], reference_w
 def calculate_fop(codon_counts: Union[Dict[str, int], Counter[str]], reference_weights: Dict[str, float]) -> float:
     """
     Calculates the Frequency of Optimal Codons (Fop).
-    Optimal codons are those with reference_weight == 1.0.
+    
+    Fop measures the proportion of optimal codons used in a gene relative to the total
+    number of codons. It ranges from 0 to 1, with higher values indicating stronger
+    preference for optimal codons.
+    
+    In this implementation, optimal codons are defined as those with reference_weight == 1.0,
+    which typically represent the most frequently used codon for each amino acid in
+    highly expressed genes.
+    
+    Formula: Fop = (Number of optimal codons) / (Total number of codons)
 
     Args:
         codon_counts (Union[Dict[str, int], Counter[str]]): Codon counts for the sequence.
         reference_weights (Dict[str, float]): Dictionary mapping codons to weights.
+                                             Codons with weight=1.0 are considered optimal.
 
     Returns:
         float: Fop value, or np.nan if calculation fails.
+               Valid Fop values range from 0 to 1.
     """
     if not reference_weights or not codon_counts: 
         logger.debug("Cannot calculate Fop: Missing codon counts or reference weights.")       
@@ -762,9 +971,17 @@ def calculate_fop(codon_counts: Union[Dict[str, int], Counter[str]], reference_w
 def calculate_rcdi(codon_counts: Union[Dict[str, int], Counter[str]], reference_weights: Dict[str, float]) -> float:
     """
     Calculates the Relative Codon Deoptimization Index (RCDI).
-    This measures similarity to a "deoptimized" reference (low usage frequency weights).
-    Formula: exp( sum( -log(w_i) * count_i ) / total_codons )
-    Assumes weights (w_i) represent relative adaptiveness (higher = better).
+    
+    RCDI measures how much a gene's codon usage deviates from the optimal codon usage
+    pattern. Unlike CAI, higher RCDI values indicate greater deviation from the reference
+    (i.e., more deoptimized).
+    
+    - RCDI = 1.0: Codon usage identical to the reference
+    - RCDI > 1.0: Codon usage deviates from the reference (deoptimized)
+    - RCDI has no upper bound
+    
+    Formula: RCDI = exp( sum( -log(w_i) * count_i ) / total_codons )
+    where w_i represents relative adaptiveness weights (higher = better).
 
     Args:
         codon_counts (Union[Dict[str, int], Counter[str]]): Codon counts for the sequence.
@@ -819,7 +1036,9 @@ def calculate_rcdi(codon_counts: Union[Dict[str, int], Counter[str]], reference_
     return rcdi if np.isfinite(rcdi) else np.nan
 
 
-# === Main Analysis Orchestration ===
+# ============================================================================
+# === MAIN ANALYSIS ORCHESTRATION ===========================================
+# ============================================================================
 
 # Type alias for the return tuple of analyze_single_sequence
 SingleSeqResultType = Tuple[Optional[Dict[str, Any]], Optional[Counter[str]]]
@@ -827,11 +1046,20 @@ SingleSeqResultType = Tuple[Optional[Dict[str, Any]], Optional[Counter[str]]]
 def analyze_single_sequence(
     record: SeqRecord,
     genetic_code_id: int,
-    reference_weights: Dict[str, float] # Assume passed as non-Optional dict (or empty)
+    reference_weights: Dict[str, float]  # Assume passed as non-Optional dict (or empty)
 ) -> SingleSeqResultType:
     """
-    Performs analysis for a single cleaned sequence record. Calculates metrics
-    like GC, ENC, CAI, Fop, RCDI, protein properties.
+    Performs comprehensive analysis for a single cleaned sequence record.
+    
+    This function serves as a central orchestrator for per-sequence analysis,
+    calculating multiple metrics in one pass through the sequence:
+    
+    1. Basic sequence properties (length, codon counts)
+    2. GC content metrics (overall and position-specific)
+    3. Protein translation and properties (GRAVY, aromaticity)
+    4. Codon usage bias indices (ENC, CAI, Fop, RCDI)
+    
+    All metrics are collected in a single dictionary for efficient processing.
 
     Args:
         record (SeqRecord): The sequence record (assumed cleaned).
@@ -840,8 +1068,8 @@ def analyze_single_sequence(
 
     Returns:
         SingleSeqResultType: Tuple containing:
-            - Dictionary of calculated metrics (or None).
-            - Codon counts (Counter) for the sequence (or None).
+            - Dictionary of calculated metrics (or None if analysis fails).
+            - Codon counts (Counter) for the sequence (or None if counting fails).
     """
     try:
         genetic_code: Dict[str, str] = get_genetic_code(genetic_code_id)
@@ -940,19 +1168,34 @@ def run_full_analysis(
 ) -> FullAnalysisResultType:
     """
     Performs all analyses SEQUENTIALLY for the provided list of sequences.
-    Relies on pre-loaded reference_weights for CAI/Fop/RCDI.
-    Optionally prepares data for and performs Correspondence Analysis (CA).
+    
+    This is the main entry point for the analysis module, orchestrating:
+    1. Overall nucleotide and dinucleotide frequency calculations
+    2. Per-sequence nucleotide and dinucleotide frequency calculations
+    3. Individual sequence analysis (GC content, codon usage indices, protein properties)
+    4. Aggregate codon usage statistics
+    5. Preparation of data for correspondence analysis (CA)
+    
+    The function processes sequences sequentially for better memory management
+    and returns comprehensive results for downstream analysis and visualization.
 
     Args:
         sequences (List[SeqRecord]): Input sequences for a single gene/dataset.
-        genetic_code_id (int): NCBI genetic code ID.
-        reference_weights (Optional[Dict[str, float]]): Pre-loaded reference weights (w).
-        fit_ca_model (bool): If True, performs Correspondence Analysis fitting.
-                           If False, CA input data might still be generated but fitting is skipped.
+        genetic_code_id (int): NCBI genetic code ID. Default is 1 (standard code).
+        reference_weights (Optional[Dict[str, float]]): Pre-loaded reference weights (w)
+                                                      for CAI/Fop/RCDI calculations.
 
     Returns:
-        AnalysisResultType: Tuple containing aggregated results, per-sequence results,
-                            frequencies, and optional CA results.
+        FullAnalysisResultType: Tuple containing:
+            - agg_usage_df: Aggregate codon usage DataFrame with RSCU values
+            - per_sequence_df: DataFrame with per-sequence metrics
+            - overall_nucl_freqs: Dictionary of overall nucleotide frequencies
+            - overall_dinucl_freqs: Dictionary of overall dinucleotide frequencies
+            - per_sequence_nucl_freqs: Dictionary of per-sequence nucleotide frequencies
+            - per_sequence_dinucl_freqs: Dictionary of per-sequence dinucleotide frequencies
+            - None: Placeholder for old reference_data (deprecated)
+            - None: Placeholder for CA results (now calculated separately)
+            - ca_input_df: DataFrame prepared for correspondence analysis
     """
     # --- Setup ---
     try:
@@ -1105,7 +1348,9 @@ def run_full_analysis(
     )
 
 
-# === Statistical Comparison Function ===
+# ============================================================================
+# === STATISTICAL COMPARISON FUNCTIONS ======================================
+# ============================================================================
 def compare_features_between_genes(
     combined_per_sequence_df: pd.DataFrame,
     features: List[str],
@@ -1113,6 +1358,16 @@ def compare_features_between_genes(
 ) -> Optional[pd.DataFrame]:
     """
     Performs statistical tests to compare features between gene groups.
+    
+    This function enables statistical comparison of sequence metrics (like GC content,
+    ENC, CAI, etc.) between different gene groups to identify significant differences.
+    It supports both parametric (ANOVA) and non-parametric (Kruskal-Wallis) tests.
+    
+    The input DataFrame should contain a 'Gene' column that identifies which gene group
+    each sequence belongs to, and columns for each feature to be compared.
+    
+    Statistical significance indicates that the distribution of a feature differs
+    significantly between at least two gene groups.
 
     Args:
         combined_per_sequence_df (pd.DataFrame): DataFrame containing per-sequence
@@ -1209,10 +1464,23 @@ def compare_features_between_genes(
     return pd.DataFrame(results)
 
 
-# === CA Fitting Function ===
+# ============================================================================
+# === CORRESPONDENCE ANALYSIS (CA) FUNCTIONS ================================
+# ============================================================================
 def perform_ca(ca_input_df: pd.DataFrame, n_components: int = 10) -> Optional[PrinceCA]: # type: ignore
     """
     Performs Correspondence Analysis on the input DataFrame using the 'prince' library.
+    
+    Correspondence Analysis (CA) is a multivariate statistical technique similar to PCA
+    but designed for categorical data. In codon usage analysis, CA helps visualize the
+    relationships between genes and their codon usage patterns in a reduced-dimensional space.
+    
+    This function handles the complex preprocessing required for CA:
+    1. Data cleaning (handling zeros, NaNs, and infinite values)
+    2. Filtering zero-variance rows and columns
+    3. Verification of marginal counts
+    4. Determining appropriate number of components
+    5. Fitting the CA model with appropriate error handling
 
     Args:
         ca_input_df (pd.DataFrame): DataFrame with sequences as index, codons as columns,
@@ -1222,6 +1490,8 @@ def perform_ca(ca_input_df: pd.DataFrame, n_components: int = 10) -> Optional[Pr
 
     Returns:
         Optional[prince.CA]: Fitted CA object from prince, or None if CA fails or library missing.
+                            The fitted object contains row and column coordinates, eigenvalues,
+                            and other CA results for visualization and interpretation.
     """
     if prince is None:
         logger.error("'prince' library not installed. Cannot perform CA.")
@@ -1328,13 +1598,13 @@ def perform_ca(ca_input_df: pd.DataFrame, n_components: int = 10) -> Optional[Pr
                 'ignore',
                 message="invalid value encountered in divide", # Matches the warning from prince
                 category=RuntimeWarning,
-                module="prince\.ca" # Be specific to the module if possible
+                module="prince.ca" # Be specific to the module if possible
             )
             warnings.filterwarnings( # Also catch the "divide by zero encountered in power" if it's different
                 'ignore',
                 message="divide by zero encountered in power",
                 category=RuntimeWarning,
-                module="prince\.ca"
+                module="prince.ca"
             )
                 
             ca = prince.CA(n_components=actual_n_ca_components, 
