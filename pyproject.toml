@@ -59,6 +59,11 @@ dev = [
     "ruff",
 ]
 
+[project.optional-dependencies]
+report = [
+    "jinja2>=3.0",
+]
+
 # --- Entry point ---
 [project.scripts]
 pycodon_analyzer = "pycodon_analyzer.cli:main" # Changed command and package name
@@ -75,4 +80,4 @@ where = ["src"]
 [tool.setuptools.package-data]
 # Target the package 'pycodon_analyzer' to include data files
 # Ensure this matches the directory name inside 'src'
-"pycodon_analyzer" = ["data/*.csv", "data/*.tsv"] # Include data files from src/pycodon_analyzer/data/
+"pycodon_analyzer" = ["data/*.csv", "data/*.tsv", "templates/*.html"] # Include data files and templates
