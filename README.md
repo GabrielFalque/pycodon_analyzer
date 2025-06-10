@@ -66,31 +66,32 @@ The tool leverages multiprocessing for faster analysis and uses Python's standar
     * Performs Correspondence Analysis (CA) on combined RSCU data from all genes.
     * Performs Correspondence Analysis (CA) on RSCU data *for each gene individually* if metadata-based coloring is requested.
     * Generates a correlation heatmap between CA axes (Dim1, Dim2 of combined CA) and other features.
-* **Output Tables (CSV):**
-    * `per_sequence_metrics_all_genes.csv`: Detailed metrics for every valid sequence, **including merged metadata if provided**.
-    * `mean_features_per_gene.csv`: Mean values for key metrics per gene.
-    * `per_sequence_rscu_wide.csv`: RSCU value for every codon for every sequence (input for combined CA).
-    * `gene_comparison_stats.csv`: Results of statistical tests between genes.
-    * `ca_row_coordinates.csv`, `ca_col_coordinates.csv`, `ca_col_contributions.csv`, `ca_eigenvalues.csv`: Detailed results from the **combined CA**.
-    * `ca_axes_vs_metadata_correlation.csv`: (If implemented) Correlations between CA axes and numerical metadata.
-* **Output Plots (Default and Metadata-Driven):**
-    * **Standard Combined Plots (in main output directory):**
-        * `RSCU_boxplot_GENENAME.(fmt)`: RSCU distribution per codon for each gene/complete set.
-        * `gc_means_barplot_by_Gene.(fmt)`: Mean GC values grouped by gene.
-        * `neutrality_plot_grouped_by_Gene.(fmt)`: GC12 vs GC3, colored by gene.
-        * `enc_vs_gc3_plot_grouped_by_Gene.(fmt)`: ENC vs GC3, colored by gene, with Wright's curve.
-        * `relative_dinucleotide_abundance.(fmt)`: Aggregate O/E ratio for dinucleotides, lines colored by gene.
-        * `ca_biplot_compXvY_combined_by_gene.(fmt)`: Combined CA biplot, points colored by gene.
-        * CA diagnostics: `ca_variance_explained_topN.(fmt)`, `ca_contribution_dimX_topN.(fmt)`.
-        * `feature_correlation_heatmap_METHOD.(fmt)`: Correlation between calculated metrics.
-        * `ca_axes_feature_corr_METHOD.(fmt)`: Correlation between combined CA axes and other features.
-    * **Per-Gene Plots Colored by Metadata (if `--color_by_metadata <COL>` is used):**
-        * Saved in: `output_dir/<METADATA_COL>_per_gene_plots/<GENE_NAME>/`
-        * For each gene (and "complete" set):
-            * `enc_vs_gc3_plot_<GENE>_by_<META_COL>.(fmt)`: Sequences colored by metadata categories.
-            * `neutrality_plot_<GENE>_by_<META_COL>.(fmt)`: Sequences colored by metadata categories.
-            * `ca_biplot_compXvY_<GENE>_by_<META_COL>.(fmt)`: CA on sequences of this gene only, points colored by metadata.
-            * `dinucl_abundance_<GENE>_by_<META_COL>.(fmt)`: Mean per-sequence dinucleotide O/E ratios, lines colored by metadata categories.
+* **Output Tables (CSV):** (All tables are linked and viewable within the HTML report)
+   * `per_sequence_metrics_all_genes.csv`: Comprehensive metrics for every valid sequence, **including merged metadata if provided**.
+   * `mean_features_per_gene.csv`: Average values for key metrics per gene.
+   * `gene_sequence_summary.csv`: Summary of sequence counts and lengths per gene.
+   * `per_sequence_rscu_wide.csv`: RSCU value for every codon for every sequence (input for combined CA).
+   * `gene_comparison_stats.csv`: Results of statistical tests between genes.
+   * `ca_row_coordinates.csv`, `ca_col_coordinates.csv`, `ca_col_contributions.csv`, `ca_eigenvalues.csv`: Detailed results from the **combined CA**.
+   * `ca_axes_vs_metadata_correlation.csv`: (If implemented) Correlations between CA axes and numerical metadata.
+* **Output Plots (Default and Metadata-Driven):** (All plots are embedded within the HTML report)
+   * **Standard Combined Plots (in main output directory):**
+       * `RSCU_boxplot_GENENAME.(fmt)`: RSCU distribution per codon for each gene/complete set.
+       * `gc_means_barplot_by_Gene.(fmt)`: Mean GC values grouped by gene.
+       * `neutrality_plot_grouped_by_Gene.(fmt)`: GC12 vs GC3, colored by gene.
+       * `enc_vs_gc3_plot_grouped_by_Gene.(fmt)`: ENC vs GC3, colored by gene, with Wright's curve.
+       * `relative_dinucleotide_abundance.(fmt)`: Aggregate O/E ratio for dinucleotides, lines colored by gene.
+       * `ca_biplot_compXvY_combined_by_gene.(fmt)`: Combined CA biplot, points colored by gene.
+       * CA diagnostics: `ca_variance_explained_topN.(fmt)`, `ca_contribution_dimX_topN.(fmt)`.
+       * `feature_correlation_heatmap_METHOD.(fmt)`: Correlation between calculated metrics.
+       * `ca_axes_feature_corr_METHOD.(fmt)`: Correlation between combined CA axes and other features.
+   * **Per-Gene Plots Colored by Metadata (if `--color_by_metadata <COL>` is used):**
+       * Saved in: `output_dir/images/<METADATA_COL>_per_gene_plots/<GENE_NAME>/`
+       * For each gene (and "complete" set):
+           * `enc_vs_gc3_plot_<GENE>_by_<META_COL>.(fmt)`: Sequences colored by metadata categories.
+           * `neutrality_plot_<GENE>_by_<META_COL>.(fmt)`: Sequences colored by metadata categories.
+           * `ca_biplot_compXvY_<GENE>_by_<META_COL>.(fmt)`: CA on sequences of this gene only, points colored by metadata.
+           * `dinucl_abundance_<GENE>_by_<META_COL>.(fmt)`: Mean per-sequence dinucleotide O/E ratios, lines colored by metadata categories.
 * **Performance:** Uses multiprocessing to process gene files in parallel.
 
 ## Prerequisites
@@ -187,6 +188,7 @@ pycodon_analyzer analyze --directory <PATH_TO_GENE_FASTA_DIR> \
   * `--skip_ca`: Flag to disable combined Correspondence Analysis.
   * `--ca_dims X Y`: Indices for CA components in combined plot (Default: 0 1).
   * `-v, --verbose`: Increase output verbosity (DEBUG level logging).
+  * `--no-html-report`: Flag to disable the generation of the comprehensive HTML report. (Default: report is generated).
   * *(Run `pycodon_analyzer analyze --help` for all options.)*
 
 **Example for `analyze`:**
@@ -210,6 +212,40 @@ pycodon_analyzer analyze \
     -t 0 \
     -v
 ```
+
+## Output Directory Structure
+
+When running the `analyze` command, results are organized into a dedicated output directory (specified by `-o` or `--output`). This directory will contain:
+
+1.  `report.html` (if not disabled by `--no-html-report`)
+    The main interactive HTML report. It provides an overview, run parameters,
+    and navigation to all detailed sections, embedding plots and linking to data tables.
+
+2.  `data/` (Subdirectory)
+    Contains all data tables generated during the analysis (primarily CSV format).
+    Key files include:
+    *   `per_sequence_metrics_all_genes.csv`: Comprehensive metrics for each valid sequence.
+                                             If metadata provided, it's merged here.
+    *   `mean_features_per_gene.csv`: Average values for key metrics per gene.
+    *   `gene_sequence_summary.csv`: Sequence counts and length statistics per gene.
+    *   `gene_comparison_stats.csv`: Results of statistical tests between genes.
+    *   `per_sequence_rscu_wide.csv`: RSCU values (wide format) for combined CA.
+    *   `ca_*.csv`: Files related to combined CA (coordinates, contributions, eigenvalues).
+
+3.  `images/` (Subdirectory, if plots not skipped by `--skip-plots`)
+    Contains all plot images generated.
+    *   Combined Plots: Directly in `images/` (e.g., overall GC, ENC vs GC3, combined CA).
+    *   Per-Gene RSCU Boxplots: e.g., `RSCU_boxplot_GENENAME.<fmt>`.
+    *   Metadata-Specific Plots (if `--color_by_metadata` is used):
+        Organized into `images/<METADATA_COLUMN_NAME>_per_gene_plots/<GENE_NAME>/`.
+        Includes ENC vs GC3, Neutrality, CA biplots, Dinucleotide abundance plots,
+        all colored by metadata categories.
+
+4.  `html/` (Subdirectory, if HTML report generated)
+    Contains secondary HTML pages that make up the interactive report.
+
+5.  `pycodon_analyzer.log` (or custom name specified by `--log-file`)
+    The detailed log file for this analysis run, located in the main output directory.
 
 ## Workflow Example
 
@@ -261,7 +297,6 @@ Required for CAI, Fop, RCDI calculations. Should be CSV or TSV with columns for 
           * Option to filter analysis based on metadata.
       * Add more statistical comparison options (e.g., pairwise tests).
   * **General:**
-      * Generate combined HTML report.
       * Implement CI/CD pipeline (e.g., GitHub Actions).
       * Consider interactive plots (Plotly/Bokeh).
       * Publish package to PyPI.
