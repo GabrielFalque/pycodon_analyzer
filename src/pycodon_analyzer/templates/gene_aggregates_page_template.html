@@ -57,8 +57,9 @@
     <h4>Relative Dinucleotide Abundance by Gene</h4>
     {% if report_data.plot_paths.combined_plots.relative_dinucleotide_abundance_combined %}
         <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.relative_dinucleotide_abundance_combined }}" 
-             alt="Relative Dinucleotide Abundance by Gene" 
+             alt="Relative Dinucleotide Abundance by Gene"
              class="zoomable">
+        <p>This plot illustrates the relative abundance of each dinucleotide (two-nucleotide sequence) across all analyzed genes. It helps in understanding biases in dinucleotide frequencies, which can be indicative of various biological processes or evolutionary pressures.</p>
     {% else %}
         <p class="unavailable">Plot not available.</p>
     {% endif %}
@@ -68,8 +69,9 @@
     <h4>ENC vs GC3 (Colored by Gene)</h4>
     {% if report_data.plot_paths.combined_plots.enc_vs_gc3_combined %}
         <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.enc_vs_gc3_combined }}" 
-             alt="ENC vs GC3 Colored by Gene" 
+             alt="ENC vs GC3 Colored by Gene"
              class="zoomable">
+        <p>This plot shows the Effective Number of Codons (ENC) against the GC content at the third codon position (GC3) for each gene. ENC measures codon usage bias, with lower values indicating stronger bias. GC3 reflects the mutational pressure on synonymous sites. The plot helps to assess the relative contributions of mutational bias and natural selection to codon usage patterns. Genes are colored to distinguish individual data points.</p>
     {% else %}
         <p class="unavailable">Plot not available.</p>
     {% endif %}
@@ -79,8 +81,9 @@
     <h4>Neutrality Plot (Colored by Gene)</h4>
     {% if report_data.plot_paths.combined_plots.neutrality_plot_combined %}
         <img src="{{ report_data.base_path_to_root }}{{ report_data.plot_paths.combined_plots.neutrality_plot_combined }}" 
-             alt="Neutrality Plot Colored by Gene" 
+             alt="Neutrality Plot Colored by Gene"
              class="zoomable">
+        <p>This plot, also known as a GC12 vs GC3 plot, examines the relationship between GC content at the first and second codon positions (GC12) and the third codon position (GC3). It is used to infer the relative roles of mutation and selection in shaping genome evolution. A strong correlation suggests that mutational bias is the primary force, while scatter indicates the influence of natural selection. Genes are colored to distinguish individual data points.</p>
     {% else %}
         <p class="unavailable">Plot not available.</p>
     {% endif %}
