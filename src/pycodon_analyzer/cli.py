@@ -1135,7 +1135,7 @@ def _perform_and_save_combined_ca(
     # data_subdir.mkdir(parents=True, exist_ok=True) # Should be created by _ensure_output_subdirectories
 
     combined_ca_input_df: Optional[pd.DataFrame] = None
-    ca_results_combined: Optional[PrinceCA] = None
+    ca_results_combined: Optional[PrinceCA] = None # type: ignore
     gene_groups_for_plotting: Optional[pd.Series] = None
     ca_row_coords_df: Optional[pd.DataFrame] = None
 
