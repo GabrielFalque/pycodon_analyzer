@@ -155,8 +155,38 @@ pycodon_analyzer <subcommand> --help
 This will show help for the specific subcommand.
 
 ### 1\. `extract` Subcommand
-(This section remains largely the same as your provided version)
-...
+
+Use this command to extract individual gene alignments from a whole genome multiple sequence alignment (MSA) based on a reference annotation file.
+
+**Synopsis:**
+
+```bash
+pycodon_analyzer extract --annotations <PATH_TO_ANNOTATION_FILE> \
+                         --alignment <PATH_TO_MSA_FILE> \
+                         --ref_id <REFERENCE_SEQUENCE_ID> \
+                         --output_dir <OUTPUT_DIRECTORY>
+```
+
+**Key Arguments for `extract`:**
+
+  * `-a, --annotations FILE`: Path to the reference gene annotation file (Required). Expected format is multi-FASTA where sequence headers contain `[gene=NAME]` or `[locus_tag=TAG]` and `[location=START..END]` tags.
+  * `-g, --alignment FILE`: Path to the whole genome multiple sequence alignment file (FASTA format) (Required).
+  * `-r, --ref_id ID`: Sequence ID of the reference genome as it appears in the alignment file (Required). This sequence is used for coordinate mapping.
+  * `-o, --output_dir DIR`: Output directory where extracted gene alignment FASTA files (e.g., `gene_GENENAME.fasta`) will be saved (Required).
+  * `-v, --verbose`: Increase output verbosity to DEBUG level for console and file logs.
+  * *(Run `pycodon_analyzer extract --help` for all options.)*
+
+**Example for `extract`:**
+
+```bash
+# Extract gene alignments from a whole genome MSA
+pycodon_analyzer extract \
+    -a my_annotations.fasta \
+    -g whole_genome_alignment.fasta \
+    -r NC_000913.3 \
+    -o extracted_gene_alignments \
+    -v
+```
 
 ### 2\. `analyze` Subcommand
 
