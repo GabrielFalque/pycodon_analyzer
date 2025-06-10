@@ -118,16 +118,17 @@ AA_ORDER: List[str] = sorted(AA_1_TO_3.keys())
 
 # === Aggregate Plots ===
 
-def plot_rscu(rscu_df: pd.DataFrame, 
+def plot_rscu(rscu_df: pd.DataFrame,
               output_filepath: str) -> None:
     """
-    Generates a bar plot of aggregate RSCU values, grouped by amino acid.
+    Generates a bar plot of aggregate Relative Synonymous Codon Usage (RSCU) values,
+    grouped by amino acid.
 
     Args:
-        rscu_df (pd.DataFrame): DataFrame containing RSCU values (must have
-                                'AminoAcid', 'Codon', 'RSCU' columns).
-        output_dir (str): Directory to save the plot.
-        file_format (str): Format to save the plot (e.g., 'png', 'svg', 'pdf'). Default 'svg'.
+        rscu_df (pd.DataFrame): DataFrame containing RSCU values. Must include
+                                'AminoAcid', 'Codon', and 'RSCU' columns.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/rscu_plot.svg').
     """
     required_cols = ['AminoAcid', 'Codon', 'RSCU']
     if rscu_df is None or rscu_df.empty or not all(col in rscu_df.columns for col in required_cols):
@@ -156,7 +157,8 @@ def plot_rscu(rscu_df: pd.DataFrame,
         # Use seaborn barplot
         sns.barplot(x='Codon', y='RSCU', hue='AminoAcid',
                     data=rscu_df_plot,
-                    dodge=False, palette='tab20', ax=ax)
+                    dodge=False, # Ensure bars for different amino acids are not dodged (side-by-side)
+                    palette='tab20', ax=ax)
 
         ax.set_title('Relative Synonymous Codon Usage (RSCU)', fontsize=16)
         ax.set_xlabel('Codon', fontsize=12)
@@ -168,6 +170,7 @@ def plot_rscu(rscu_df: pd.DataFrame,
         # Improve legend
         try:
             ax.legend(title='Amino Acid', bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+            # Adjust layout to make space for the legend outside the plot area
             plt.tight_layout(rect=[0, 0, 0.9, 1])
         except Exception as legend_err:
             logger.warning(f"Could not optimally place RSCU plot legend: {legend_err}. Using default layout.")
@@ -187,16 +190,16 @@ def plot_rscu(rscu_df: pd.DataFrame,
         if fig is not None: plt.close(fig)
 
 
-def plot_codon_frequency(rscu_df: pd.DataFrame, 
+def plot_codon_frequency(rscu_df: pd.DataFrame,
                          output_filepath: str) -> None:
     """
     Generates a bar plot of aggregate codon frequencies.
 
     Args:
-        rscu_df (pd.DataFrame): DataFrame containing frequency values (must have
-                                'Codon', 'Frequency' columns).
-        output_dir (str): Directory to save the plot.
-        file_format (str): Format to save the plot. Default 'svg'.
+        rscu_df (pd.DataFrame): DataFrame containing codon frequency values. Must include
+                                'Codon' and 'Frequency' columns.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/codon_frequency.svg').
     """
     required_cols = ['Codon', 'Frequency']
     if rscu_df is None or rscu_df.empty or not all(col in rscu_df.columns for col in required_cols):
@@ -241,15 +244,17 @@ def plot_codon_frequency(rscu_df: pd.DataFrame,
         if fig is not None: plt.close(fig)
 
 
-def plot_dinucleotide_freq(dinucl_freqs: Dict[str, float], 
+def plot_dinucleotide_freq(dinucl_freqs: Dict[str, float],
                            output_filepath: str) -> None:
     """
     Plots relative dinucleotide frequencies as a bar chart.
 
     Args:
-        dinucl_freqs (Dict[str, float]): Dictionary mapping dinucleotides to frequencies.
-        output_dir (str): Directory to save the plot.
-        file_format (str): Format to save the plot. Default 'svg'.
+        dinucl_freqs (Dict[str, float]): Dictionary where keys are dinucleotide strings
+                                        (e.g., 'AA', 'AT') and values are their
+                                        corresponding frequencies.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/dinucleotide_frequency.svg').
     """
     if not dinucl_freqs:
         logger.warning("No dinucleotide frequency data provided to plot.")
@@ -293,17 +298,21 @@ def plot_dinucleotide_freq(dinucl_freqs: Dict[str, float],
         if fig is not None: plt.close(fig)
 
 
-def plot_gc_means_barplot(per_sequence_df: pd.DataFrame, 
-                          output_filepath: str, 
+def plot_gc_means_barplot(per_sequence_df: pd.DataFrame,
+                          output_filepath: str,
                           group_by: str = 'Gene') -> None:
     """
-    Plots a grouped bar chart of mean GC%, GC1-3%, GC12 values per group (e.g., 'Gene').
+    Plots a grouped bar chart of mean GC%, GC1-3%, and GC12 values,
+    aggregated by a specified grouping column (e.g., 'Gene').
 
     Args:
         per_sequence_df (pd.DataFrame): DataFrame containing per-sequence metrics.
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format. Default 'svg'.
-        group_by (str): Column name in per_sequence_df to group by. Default 'Gene'.
+                                        Must include 'GC', 'GC1', 'GC2', 'GC3', 'GC12'
+                                        and the `group_by` column.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/gc_means_barplot.svg').
+        group_by (str): The column name in `per_sequence_df` to use for grouping
+                        the data (e.g., 'Gene', 'Species'). Defaults to 'Gene'.
     """
     gc_cols: List[str] = ['GC', 'GC1', 'GC2', 'GC3', 'GC12']
     if per_sequence_df is None or per_sequence_df.empty:
@@ -378,13 +387,30 @@ def plot_gc_means_barplot(per_sequence_df: pd.DataFrame,
 
 def plot_neutrality(per_sequence_df: pd.DataFrame,
                     output_filepath: str,
-                    group_by_col: Optional[str] = None, # Renamed, can be 'Gene' or metadata col
-                    palette: Optional[Dict[str, Any]] = None, # Palette for group_by_col
-                    filename_suffix: str = "",
+                    group_by_col: Optional[str] = None,
+                    palette: Optional[Dict[str, Any]] = None,
                     plot_title_prefix: str = ""
                     ) -> None:
     """
-    Generates a Neutrality Plot (GC12 vs GC3). Optionally colors points by group_by_col.
+    Generates a Neutrality Plot, visualizing the relationship between GC12 and GC3 content.
+    This plot helps assess the influence of mutational bias versus natural selection on codon usage.
+
+    Optionally, points can be colored based on a specified grouping column (e.g., 'Gene' or a metadata column).
+    A linear regression line is fitted to the data, and its R-squared value is displayed.
+
+    Args:
+        per_sequence_df (pd.DataFrame): DataFrame containing per-sequence metrics.
+                                        Must include 'GC12' and 'GC3' columns.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/neutrality_plot.svg').
+        group_by_col (Optional[str]): The column name in `per_sequence_df` to use for
+                                      coloring (hueing) the data points. If None, no hue is applied.
+                                      Defaults to None.
+        palette (Optional[Dict[str, Any]]): A dictionary mapping group names (from `group_by_col`)
+                                            to specific colors. If None, Seaborn's default palette
+                                            will be used. Defaults to None.
+        plot_title_prefix (str): An optional prefix to add to the plot title (e.g., "Species X: ").
+                                 Defaults to an empty string.
     """
     required_cols = ['GC12', 'GC3']
     if per_sequence_df is None or per_sequence_df.empty:
@@ -407,13 +433,14 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
         plot_df['GC12_num'] = pd.to_numeric(plot_df['GC12'], errors='coerce')
         plot_df_valid = plot_df.dropna(subset=['GC3_num', 'GC12_num'])
 
-        if len(plot_df_valid) < 2: #
-            logger.warning(f"{plot_title_prefix}Not enough valid data points (>=2) for Neutrality Plot regression/correlation. Skipping.") #
-            if plot_df_valid.empty: return #
+        if len(plot_df_valid) < 2: # Need at least 2 points for linear regression
+            logger.warning(f"{plot_title_prefix}Not enough valid data points (>=2) for Neutrality Plot regression/correlation. Skipping.")
+            return
 
-        # Determine grouping possibility
-        hue_column_actual = group_by_col if group_by_col and not plot_df_valid[group_by_col].isnull().all() and plot_df_valid[group_by_col].nunique() > 0 else None #
-        legend_title = group_by_col if hue_column_actual else "Group"
+        # Determine grouping possibility for hueing
+        # A hue column is used if provided, exists in data, is not all null, and has more than one unique value.
+        hue_column_actual = group_by_col if group_by_col and not plot_df_valid[group_by_col].isnull().all() and plot_df_valid[group_by_col].nunique() > 0 else None
+        legend_title = group_by_col if hue_column_actual else "Group" # Title for the legend
 
         fig, ax = plt.subplots(figsize=(8, 8))
 
@@ -448,23 +475,25 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
         title = f'{plot_title_prefix}Neutrality Plot (GC12 vs GC3)'
         if hue_column_actual:
             title += f' (by {legend_title})'
-        ax.set_title(title, fontsize=14) 
-        ax.set_xlabel('GC3 Content (%)', fontsize=12) 
-        ax.set_ylabel('GC12 Content (%)', fontsize=12) 
-        ax.grid(True, linestyle=':', alpha=0.6) 
-        if not np.isnan(slope): 
-             ax.text(0.05, 0.95, f'Overall Slope={slope:.3f}', transform=ax.transAxes, va='top', 
-                      bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7)) 
-             
-        # Adjust Axis Limits
-        min_gc3_val, max_gc3_val = plot_df_valid['GC3_num'].min(), plot_df_valid['GC3_num'].max() 
-        min_gc12_val, max_gc12_val = plot_df_valid['GC12_num'].min(), plot_df_valid['GC12_num'].max() 
-        x_padding = max((max_gc3_val - min_gc3_val) * 0.05, 2) 
-        y_padding = max((max_gc12_val - min_gc12_val) * 0.05, 2)
+        ax.set_title(title, fontsize=14)
+        ax.set_xlabel('GC3 Content (%)', fontsize=12)
+        ax.set_ylabel('GC12 Content (%)', fontsize=12)
+        ax.grid(True, linestyle=':', alpha=0.6)
+        if not np.isnan(slope):
+             # Display the calculated slope on the plot
+             ax.text(0.05, 0.95, f'Overall Slope={slope:.3f}', transform=ax.transAxes, va='top',
+                      bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7))
+
+        # Adjust Axis Limits to provide some padding around the data
+        min_gc3_val, max_gc3_val = plot_df_valid['GC3_num'].min(), plot_df_valid['GC3_num'].max()
+        min_gc12_val, max_gc12_val = plot_df_valid['GC12_num'].min(), plot_df_valid['GC12_num'].max()
+        x_padding = max((max_gc3_val - min_gc3_val) * 0.05, 2) # At least 2% padding
+        y_padding = max((max_gc12_val - min_gc12_val) * 0.05, 2) # At least 2% padding
         x_limits = (max(0, min_gc3_val - x_padding), min(100, max_gc3_val + x_padding))
         y_limits = (max(0, min_gc12_val - y_padding), min(100, max_gc12_val + y_padding))
         ax.set_xlim(x_limits)
         ax.set_ylim(y_limits)
+        # Add a diagonal line (y=x) to represent neutrality
         diag_limits = [max(x_limits[0], y_limits[0]), min(x_limits[1], y_limits[1])]
         ax.plot(diag_limits, diag_limits, 'gray', linestyle=':', alpha=0.7, lw=1, label='y=x')
         ax.tick_params(axis='both', which='major', labelsize=10)
@@ -524,23 +553,30 @@ def plot_neutrality(per_sequence_df: pd.DataFrame,
 
 def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
                     output_filepath: str,
-                    group_by_col: Optional[str] = None, # Renamed from group_by for clarity, can be 'Gene' or a metadata column
-                    palette: Optional[Dict[str, Any]] = None, # Palette for the group_by_col
-                    filename_suffix: str = "",
-                    plot_title_prefix: str = "" # Optional prefix for the plot title
+                    group_by_col: Optional[str] = None,
+                    palette: Optional[Dict[str, Any]] = None,
+                    plot_title_prefix: str = ""
                    ) -> None:
     """
-    Generates ENC vs GC3 plot, including Wright's expected curve.
-    Optionally colors points by a specified group_by_col (e.g., 'Gene' or a metadata column).
+    Generates an Effective Number of Codons (ENC) vs. GC3 content plot,
+    including Wright's theoretical expected curve. This plot helps to assess
+    the degree of codon usage bias and the influence of GC content.
+
+    Optionally, points can be colored based on a specified grouping column (e.g., 'Gene' or a metadata column).
 
     Args:
-        per_sequence_df (pd.DataFrame): DataFrame with per-sequence metrics (must have ENC, GC3).
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format.
-        group_by_col (Optional[str]): Column name to group/hue by. If None, no hue is applied.
-        palette (Optional[Dict[str, Any]]): Palette for group colors.
-        filename_suffix (str): Suffix to add to the output filename.
-        plot_title_prefix (str): Prefix for the plot title (e.g., "Gene X: ").
+        per_sequence_df (pd.DataFrame): DataFrame containing per-sequence metrics.
+                                        Must include 'ENC' and 'GC3' columns.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/enc_vs_gc3_plot.svg').
+        group_by_col (Optional[str]): The column name in `per_sequence_df` to use for
+                                      coloring (hueing) the data points. If None, no hue is applied.
+                                      Defaults to None.
+        palette (Optional[Dict[str, Any]]): A dictionary mapping group names (from `group_by_col`)
+                                            to specific colors. If None, Seaborn's default palette
+                                            will be used. Defaults to None.
+        plot_title_prefix (str): An optional prefix to add to the plot title (e.g., "Gene X: ").
+                                 Defaults to an empty string.
     """
     required_cols = ['ENC', 'GC3']
     if per_sequence_df is None or per_sequence_df.empty:
@@ -570,12 +606,16 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
             logger.warning("No valid ENC and GC3 data (after dropping NaNs) to plot.")
             return
 
-        # Calculate Wright's expected curve
-        s_values = np.linspace(0.01, 0.99, 200) # GC3 fraction
+        # Calculate Wright's theoretical expected ENC curve based on GC3 content (s_values)
+        # Formula: ENC = 2 + s + 29 / (s^2 + (1-s)^2)
+        # where s is the GC3 content (fraction)
+        s_values = np.linspace(0.01, 0.99, 200) # GC3 fraction from 0.01 to 0.99
         denominator = (s_values**2 + (1 - s_values)**2)
         expected_enc = np.full_like(s_values, np.nan)
+        # Avoid division by zero or very small numbers
         valid_denom = denominator > 1e-9
         expected_enc[valid_denom] = 2 + s_values[valid_denom] + (29 / denominator[valid_denom])
+        # Replace any non-finite values (e.g., from division by zero if valid_denom check was insufficient) with NaN
         expected_enc = np.where(np.isfinite(expected_enc), expected_enc, np.nan)
 
         # Determine actual hue column and legend title
@@ -604,45 +644,43 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
         ax.set_xlabel('GC3 Content (Fraction)', fontsize=12)
         ax.set_ylabel('Effective Number of Codons (ENC)', fontsize=12)
         ax.set_xlim(0, 1)
+        # Set Y-axis limits, ensuring a reasonable range for ENC values (typically 20-61)
         min_enc = max(15, plot_df_valid['ENC_num'].min() - 2) if not plot_df_valid.empty else 15
         max_enc = min(65, plot_df_valid['ENC_num'].max() + 2) if not plot_df_valid.empty else 65
         ax.set_ylim(min_enc, max_enc)
         ax.grid(True, linestyle=':', alpha=0.6)
         ax.tick_params(axis='both', which='major', labelsize=10)
-        
+
         # --- Add Adjusted Groups Labels ---
-        # Text labels for groups (e.g., mean point of each group)
+        # Text labels for groups (e.g., mean point of each group) to avoid overlap
         if hue_column_actual:
-            texts: List[MatplotlibText] = [] # Use the imported MatplotlibText
-            # Ensure palette is a dictionary if used for specific colors
-            # Or seaborn handles it if palette is a name like "husl"
+            texts: List[MatplotlibText] = [] # Use the imported MatplotlibText for type hinting
             group_data = plot_df_valid.groupby(hue_column_actual)
             for name, group_df in group_data:
                 if not group_df.empty:
                     mean_x = group_df['GC3_frac'].mean()
                     mean_y = group_df['ENC_num'].mean()
-                    # Determine color for the text
-                    text_color = 'darkgrey' # Default
+                    # Determine color for the text label based on the palette
+                    text_color = 'darkgrey' # Default color if not found in palette
                     if isinstance(palette, dict) and name in palette:
                         text_color = palette[name]
-                    elif isinstance(palette, str): # Seaborn palette name
-                        # This is trickier, sns might have chosen the color.
-                        # For simplicity, use a default or try to get from scatter_plot_object if possible.
-                        pass # Stick to default for named palettes for now
+                    # If palette is a seaborn named palette (str), seaborn handles colors internally.
+                    # For text labels, we might need to manually map or use a default.
+                    # For simplicity, we stick to default if palette is a string name.
 
                     txt = ax.text(mean_x, mean_y, str(name), fontsize=8, alpha=0.9, color=text_color,
                                   ha='center', va='center',
                                   bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
                     texts.append(txt)
             if texts:
-                if ADJUSTTEXT_AVAILABLE: # Check availability
+                if ADJUSTTEXT_AVAILABLE: # Check if adjustText library is installed
                     try:
                         adjust_text(texts, ax=ax, add_objects=[scatter_plot_object] if scatter_plot_object else [],
                                     arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.6),
                                     force_points=(0.6,0.8), force_text=(0.4,0.6), expand_points=(1.3,1.3))
                     except Exception as adj_err:
                         logger.warning(f"adjustText failed for ENC vs GC3 labels: {adj_err}.")
-                else: # Log if not available
+                else: # Log if adjustText is not available
                     logger.info("adjustText library not installed. Group labels on ENC vs GC3 plot may overlap.")
 
         # Legend handling
@@ -676,28 +714,31 @@ def plot_enc_vs_gc3(per_sequence_df: pd.DataFrame,
 
 # --- Function for per-gene dinucleotide abundance by metadata ---
 def plot_per_gene_dinucleotide_abundance_by_metadata(
-    per_sequence_oe_ratios_df: pd.DataFrame, # Cols: Dinucleotide, RelativeAbundance, and metadata_hue_col
+    per_sequence_oe_ratios_df: pd.DataFrame,
     metadata_hue_col: str,
     output_filepath: str,
-    palette: Optional[Dict[str, Any]], # Palette for metadata categories
-    gene_name: str, # For title and filename
-    filename_suffix_extra: str = "" # e.g., "_by_lineage"
+    palette: Optional[Dict[str, Any]],
+    gene_name: str,
 ) -> None:
     """
-    Plots per-gene dinucleotide O/E ratios, with lines/points aggregated and colored
-    by a specified metadata column.
+    Plots per-gene dinucleotide Observed/Expected (O/E) ratios, with lines and points
+    aggregated and colored by a specified metadata column. This helps visualize
+    how dinucleotide abundance patterns vary across different metadata categories
+    for a given gene.
 
     Args:
         per_sequence_oe_ratios_df (pd.DataFrame): DataFrame containing per-sequence
-            O/E ratios. Must have 'Dinucleotide', 'RelativeAbundance', and the
-            `metadata_hue_col` columns.
+            O/E ratios. Must include 'Dinucleotide', 'RelativeAbundance', and the
+            column specified by `metadata_hue_col`.
         metadata_hue_col (str): The name of the column in `per_sequence_oe_ratios_df`
-                                to use for hueing (coloring lines/points).
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format.
-        palette (Optional[Dict[str, Any]]): Color palette for the metadata categories.
-        gene_name (str): Name of the gene for the plot title and filename.
-        filename_suffix_extra (str): Additional suffix for the filename.
+                                to use for coloring (hueing) the lines and points.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/gene_X_dinucleotide_oe.svg').
+        palette (Optional[Dict[str, Any]]): A dictionary mapping metadata categories (from
+                                            `metadata_hue_col`) to specific colors. If None,
+                                            Seaborn's default palette will be used.
+        gene_name (str): The name of the gene for which the plot is being generated.
+                         Used in the plot title and logging.
     """
     logger.debug(f"Plotting dinucleotide O/E for gene '{gene_name}', hue by '{metadata_hue_col}'")
     fig: Optional[Figure] = None
@@ -779,20 +820,23 @@ def plot_per_gene_dinucleotide_abundance_by_metadata(
             plt.close(fig)
 
 
-def plot_ca_contribution(ca_results: PrinceCA, 
-                         dimension: int, 
-                         n_top: int, 
-                         output_filepath: str) -> None: # type: ignore
+def plot_ca_contribution(ca_results: PrinceCA,
+                         dimension: int,
+                         n_top: int,
+                         output_filepath: str) -> None:
     """
-    Generates a bar plot of the top N variables (codons) contributing
-    to a specific CA dimension.
+    Generates a bar plot showing the percentage contribution of the top N variables (codons)
+    to a specific dimension of a Correspondence Analysis (CA). This helps identify which
+    codons are most influential in shaping a particular CA axis.
 
     Args:
-        ca_results (PrinceCA): Fitted CA object from the 'prince' library.
-        dimension (int): The CA dimension index (0 for Dim 1, 1 for Dim 2, etc.).
-        n_top (int): Number of top contributing variables to display.
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format.
+        ca_results (PrinceCA): A fitted Correspondence Analysis (CA) object from the
+                               'prince' library, containing the results of the CA.
+        dimension (int): The 0-indexed CA dimension to analyze (e.g., 0 for Dimension 1,
+                         1 for Dimension 2).
+        n_top (int): The number of top contributing variables (codons) to display in the plot.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/ca_dim1_contribution.svg').
     """
     if prince is None or ca_results is None or not isinstance(ca_results, prince.CA): # Runtime check against imported module
         logger.warning("No valid CA results (or prince library missing) available for contribution plot.")
@@ -865,17 +909,20 @@ def plot_ca_contribution(ca_results: PrinceCA,
         if fig is not None: plt.close(fig)
 
 
-def plot_ca_variance(ca_results: PrinceCA, 
-                     n_dims: int, 
-                     output_filepath: str) -> None: # type: ignore
+def plot_ca_variance(ca_results: PrinceCA,
+                     n_dims: int,
+                     output_filepath: str) -> None:
     """
-    Generates a bar plot of the variance explained by the first N CA dimensions.
+    Generates a bar plot showing the percentage of variance explained by the
+    first N dimensions of a Correspondence Analysis (CA). This plot helps
+    determine the optimal number of dimensions to retain for further analysis.
 
     Args:
-        ca_results (PrinceCA): Fitted CA object.
-        n_dims (int): Maximum number of dimensions to display.
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format.
+        ca_results (PrinceCA): A fitted Correspondence Analysis (CA) object from the
+                               'prince' library, containing the eigenvalues summary.
+        n_dims (int): The maximum number of CA dimensions to display in the plot.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/ca_variance_explained.svg').
     """
     if prince is None or ca_results is None or not isinstance(ca_results, prince.CA): # Runtime check against imported module
         logger.warning("No valid CA results (or prince library missing) available for contribution plot.")
@@ -977,14 +1024,40 @@ def plot_ca(
     output_filepath: str,
     comp_x: int = 0,
     comp_y: int = 1,
-    groups: Optional[pd.Series] = None, # This will be the metadata series for hueing
-    palette: Optional[Dict[str, Any]] = None, # Palette for the groups
-    filename_suffix: str = "",
+    groups: Optional[pd.Series] = None,
+    palette: Optional[Dict[str, Any]] = None,
     plot_title_prefix: str = ""
 ) -> None:
     """
-    Generates Correspondence Analysis biplot.
-    Optionally colors row points based on the 'groups' Series (e.g., metadata categories).
+    Generates a Correspondence Analysis (CA) biplot, visualizing the relationships
+    between rows (e.g., sequences/genes) and columns (e.g., codons) in a reduced
+    dimensional space.
+
+    Optionally, row points can be colored based on a provided `groups` Series
+    (e.g., metadata categories like species or lineage). Labels for these groups
+    are added and adjusted to minimize overlap.
+
+    Args:
+        ca_results (PrinceCA): A fitted Correspondence Analysis (CA) object from the
+                               'prince' library, containing the CA results.
+        ca_input_df (pd.DataFrame): The original DataFrame used as input for fitting
+                                    the CA model. This is used to extract row and
+                                    column coordinates.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/ca_biplot.svg').
+        comp_x (int): The 0-indexed CA component to plot on the X-axis (e.g., 0 for Dim 1).
+                      Defaults to 0.
+        comp_y (int): The 0-indexed CA component to plot on the Y-axis (e.g., 1 for Dim 2).
+                      Defaults to 1.
+        groups (Optional[pd.Series]): A pandas Series containing grouping information for
+                                      the rows (sequences/genes). Its index should align
+                                      with the index of `ca_input_df`. If provided, row
+                                      points will be colored by these groups. Defaults to None.
+        palette (Optional[Dict[str, Any]]): A dictionary mapping group names (from `groups`)
+                                            to specific colors. If None, Seaborn's default palette
+                                            will be used. Defaults to None.
+        plot_title_prefix (str): An optional prefix to add to the plot title (e.g., "Species X: ").
+                                 Defaults to an empty string.
     """
     if prince is None or ca_results is None or not isinstance(ca_results, prince.CA): 
         logger.warning(f"{plot_title_prefix}No valid CA results (or prince library missing) to plot. Skipping.") 
@@ -1055,17 +1128,19 @@ def plot_ca(
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        # Hueing logic based on 'groups' Series
+        # Logic to determine if hueing (coloring by groups) should be performed
         perform_hueing = False
-        legend_title = "Group"
-        groups_for_hue: Optional[pd.Series] = None
+        legend_title = "Group" # Default legend title
+        groups_for_hue: Optional[pd.Series] = None # Series to hold the actual group data for hueing
 
         if groups is not None and isinstance(groups, pd.Series) and row_coords is not None and not row_coords.empty:
             try:
-                # Align groups Series with the filtered row_coords index
+                # Align the 'groups' Series with the filtered 'row_coords' index to ensure matching data points
                 groups_aligned = groups.reindex(row_coords.index).dropna()
-                if not groups_aligned.empty and groups_aligned.nunique() > 0: # Ensure some groups exist after aligning and dropping NA
+                # Proceed with hueing only if there are valid groups and more than one unique category
+                if not groups_aligned.empty and groups_aligned.nunique() > 0:
                     perform_hueing = True
+                    # Use the name of the groups Series as the legend title, or a default "Category"
                     legend_title = groups_aligned.name if groups_aligned.name else "Category"
                     groups_for_hue = groups_aligned
                 elif not groups_aligned.empty:
@@ -1076,34 +1151,35 @@ def plot_ca(
 
         # Plot row points (sequences/genes)
         if row_coords is not None and not row_coords.empty:
-            # Use a temporary DataFrame for plotting with hue to avoid modifying row_coords
+            # Create a temporary DataFrame for plotting with hue to avoid modifying the original row_coords
             plot_data_rows = row_coords.copy()
             if perform_hueing and groups_for_hue is not None:
-                # Ensure hue column name is unique and does not clash
+                # Assign the groups data to a new column in the temporary DataFrame for seaborn's hue parameter
+                # Ensure the hue column name is unique and does not clash with existing columns
                 hue_col_name = legend_title if legend_title not in plot_data_rows.columns else f"{legend_title}_hue"
                 plot_data_rows[hue_col_name] = groups_for_hue
                 row_scatter_object = sns.scatterplot(
                     data=plot_data_rows, x=comp_x, y=comp_y, hue=hue_col_name,
                     ax=ax, s=60, alpha=0.7, palette=palette, legend='full')
             else:
+                # If no hueing, plot all row points with a default color
                 row_scatter_object = ax.scatter(row_coords[comp_x], row_coords[comp_y], s=60, alpha=0.7, label='Rows (Sequences)', color='blue')
 
-        # Plot column points (codons) - less emphasized for clarity
-        """
-        if col_coords is not None and not col_coords.empty:
-            ax.scatter(col_coords[comp_x], col_coords[comp_y], marker='x', s=40, alpha=0.6, c='dimgray', label='Cols (Codons)')
-            if len(col_coords) < 30: # Add labels for codons only if not too many, to avoid clutter
-                texts_col_labels: List[MatplotlibText] = []
-                for idx, txt_val in enumerate(col_coords.index):
-                     texts_col_labels.append(ax.text(col_coords.iloc[idx, comp_x], col_coords.iloc[idx, comp_y], txt_val, fontsize=7, color='darkred', alpha=0.8))
-                if ADJUSTTEXT_AVAILABLE and texts_col_labels: # MODIFIED: Check availability
-                    try: adjust_text(texts_col_labels, ax=ax, arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.5))
-                    except Exception as adj_err_col: logger.warning(f"adjustText for CA column labels failed: {adj_err_col}")
-                # ADDED: Log if adjustText not available for column labels
-                elif not ADJUSTTEXT_AVAILABLE and texts_col_labels:
-                    logger.info(f"{plot_title_prefix}adjustText library not installed. CA column labels may overlap.")
-                # END ADDED
-        """
+        # Plot column points (codons) - currently commented out to reduce clutter and focus on row points.
+        # If re-enabled, consider adding adjust_text for column labels as well.
+        # """
+        # if col_coords is not None and not col_coords.empty:
+        #     ax.scatter(col_coords[comp_x], col_coords[comp_y], marker='x', s=40, alpha=0.6, c='dimgray', label='Cols (Codons)')
+        #     if len(col_coords) < 30: # Add labels for codons only if not too many, to avoid clutter
+        #         texts_col_labels: List[MatplotlibText] = []
+        #         for idx, txt_val in enumerate(col_coords.index):
+        #              texts_col_labels.append(ax.text(col_coords.iloc[idx, comp_x], col_coords.iloc[idx, comp_y], txt_val, fontsize=7, color='darkred', alpha=0.8))
+        #         if ADJUSTTEXT_AVAILABLE and texts_col_labels:
+        #             try: adjust_text(texts_col_labels, ax=ax, arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.5))
+        #             except Exception as adj_err_col: logger.warning(f"adjustText for CA column labels failed: {adj_err_col}")
+        #         elif not ADJUSTTEXT_AVAILABLE and texts_col_labels:
+        #             logger.info(f"{plot_title_prefix}adjustText library not installed. CA column labels may overlap.")
+        # """
 
         # Add Adjusted Row Labels (if hueing by groups)
         # Encapsulate adjust_text usage for row labels
@@ -1112,20 +1188,21 @@ def plot_ca(
             # Use plot_data_rows which has the hue column
             temp_label_df_ca = plot_data_rows.copy() # plot_data_rows already created if perform_hueing is True
 
-            group_data_ca_iter = temp_label_df_ca.groupby(legend_title) # Use legend_title as it's the actual hue column name in plot_data_rows
+            group_data_ca_iter = temp_label_df_ca.groupby(legend_title) # Group by the actual hue column name
             for name_val, group_df_ca in group_data_ca_iter:
                 if not group_df_ca.empty:
                     mean_x_ca, mean_y_ca = group_df_ca[comp_x].mean(), group_df_ca[comp_y].mean()
+                    # Determine the text color for the group label, prioritizing the provided palette
                     text_color_ca = palette.get(name_val, 'darkgrey') if palette and isinstance(palette, dict) else 'darkgrey'
-                    txt_obj = ax.text(mean_x_ca, mean_y_ca, 
-                                      str(name_val), fontsize=8, alpha=0.9, 
+                    txt_obj = ax.text(mean_x_ca, mean_y_ca,
+                                      str(name_val), fontsize=8, alpha=0.9,
                                       color=text_color_ca,
-                                      ha='center', va='center', 
-                                      bbox=dict(boxstyle='round,pad=0.2', 
+                                      ha='center', va='center',
+                                      bbox=dict(boxstyle='round,pad=0.2',
                                                 fc='white', ec='none', alpha=0.7))
                     texts_row_labels.append(txt_obj)
             if texts_row_labels:
-                if ADJUSTTEXT_AVAILABLE: # Check availability
+                if ADJUSTTEXT_AVAILABLE: # Check if adjustText library is installed
                     try:
                         adjust_text(texts_row_labels, ax=ax,
                                     add_objects=[row_scatter_object] if row_scatter_object else [],
@@ -1135,7 +1212,7 @@ def plot_ca(
                                     expand_points=(1.3,1.3))
                     except Exception as adj_err_row:
                         logger.warning(f"{plot_title_prefix}adjustText for CA row group labels failed: {adj_err_row}.")
-                else: # Log if not available
+                else: # Log if adjustText is not available
                     logger.info(f"{plot_title_prefix}adjustText library not installed. CA row group labels may overlap.")
 
         # Customizations
@@ -1156,17 +1233,18 @@ def plot_ca(
             try:
                 # If hueing by groups, the legend title is already set by seaborn if legend='full'
                 # If not hueing by groups, or if we want to customize, we can do it here.
-                if perform_hueing: # The legend generated by seaborn scatterplot with hue is usually good
+                if perform_hueing: # If hueing by groups, seaborn's legend is usually sufficient
                     ax.legend(title=legend_title, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
+                    # Adjust layout to make space for the external legend
                     plt.tight_layout(rect=[0, 0, 0.85, 1])
-                else: # Legend for 'Rows' and 'Cols' if no hueing
+                else: # If no hueing, show legend for 'Rows' and 'y=x' line if present
                     ax.legend(loc='best')
                     plt.tight_layout()
             except Exception as legend_err:
                 logger.warning(f"{plot_title_prefix}Could not place CA plot legend optimally: {legend_err}")
                 plt.tight_layout()
         else:
-            plt.tight_layout() 
+            plt.tight_layout()
 
         # Saving
         output_path_obj = Path(output_filepath)
@@ -1182,17 +1260,20 @@ def plot_ca(
         if fig is not None: plt.close(fig)
 
 
-def plot_usage_comparison(agg_usage_df: pd.DataFrame, 
-                          reference_data: pd.DataFrame, 
+def plot_usage_comparison(agg_usage_df: pd.DataFrame,
+                          reference_data: pd.DataFrame,
                           output_filepath: str) -> None:
     """
-    Plots observed vs reference RSCU values (Scatter plot).
+    Generates a scatter plot comparing observed RSCU values against reference RSCU values.
+    A regression line and R-squared value are included to quantify the correlation.
 
     Args:
-        agg_usage_df (pd.DataFrame): DataFrame with calculated aggregate usage (needs Codon, RSCU).
-        reference_data (pd.DataFrame): DataFrame with reference usage (needs Codon index, RSCU column).
-        output_dir (str): Directory to save plot.
-        file_format (str): Plot file format. Default 'svg'.
+        agg_usage_df (pd.DataFrame): DataFrame containing the calculated aggregate RSCU values.
+                                    Must include 'Codon' and 'RSCU' columns.
+        reference_data (pd.DataFrame): DataFrame containing reference RSCU values.
+                                      Its index should be 'Codon' and it must have an 'RSCU' column.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/rscu_comparison.svg').
     """
     if reference_data is None or 'RSCU' not in reference_data.columns:
         logger.warning("Cannot plot RSCU comparison: reference RSCU data not available or missing 'RSCU' column.")
@@ -1242,8 +1323,9 @@ def plot_usage_comparison(agg_usage_df: pd.DataFrame,
              ax.text(0.05, 0.95, f'R²={r_squared:.3f}', transform=ax.transAxes, va='top',
                       bbox=dict(boxstyle='round,pad=0.3', fc='lightcyan', alpha=0.7))
 
-        # Add diagonal line y=x
+        # Add a diagonal line (y=x) to indicate perfect correlation
         all_vals = pd.concat([comp_df['Reference_RSCU'], comp_df['Observed_RSCU']])
+        # Determine plot limits based on data, with a small padding, ensuring non-negative values
         lim_min = max(0, all_vals.min() - 0.1) if not all_vals.empty else 0
         lim_max = all_vals.max() + 0.1 if not all_vals.empty else 1.0
         lims = [lim_min, lim_max]
@@ -1266,19 +1348,24 @@ def plot_usage_comparison(agg_usage_df: pd.DataFrame,
         if fig is not None: plt.close(fig)
 
 
-def plot_relative_dinucleotide_abundance(rel_abund_df: pd.DataFrame, 
+def plot_relative_dinucleotide_abundance(rel_abund_df: pd.DataFrame,
                                          output_filepath: str,
                                          palette: Optional[Dict[str, Any]] = None
                                          ) -> None:
     """
-    Plots the relative dinucleotide abundance (O/E ratio) per gene using a line plot.
+    Plots the relative dinucleotide abundance (Observed/Expected ratio) per gene
+    using a line plot. Each line represents a gene, showing how the O/E ratio
+    varies across different dinucleotides.
 
     Args:
-        rel_abund_df (pd.DataFrame): DataFrame in long format with columns
-                                     'Gene', 'Dinucleotide', 'RelativeAbundance'.
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format. Default 'svg'.
-        palette (Optional[Dict[str, Any]]): Palette for gene colors.
+        rel_abund_df (pd.DataFrame): DataFrame in long format containing relative
+                                     dinucleotide abundance data. Must include
+                                     'Gene', 'Dinucleotide', and 'RelativeAbundance' columns.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/relative_dinucleotide_abundance.svg').
+        palette (Optional[Dict[str, Any]]): A dictionary mapping gene names to specific colors.
+                                            If None, Seaborn's default palette will be used.
+                                            Defaults to None.
     """
     required_cols = ['Gene', 'Dinucleotide', 'RelativeAbundance']
     if rel_abund_df is None or rel_abund_df.empty:
@@ -1305,7 +1392,7 @@ def plot_relative_dinucleotide_abundance(rel_abund_df: pd.DataFrame,
         gene_order = sorted([g for g in unique_genes if g != 'complete'])
         if 'complete' in unique_genes: gene_order.append('complete')
 
-        # Determine figure size
+        # Determine figure width dynamically based on the number of dinucleotides to ensure readability
         fig_width = max(10, len(dinucl_order) * 0.6)
         fig, ax = plt.subplots(figsize=(fig_width, 6))
 
@@ -1353,16 +1440,22 @@ def plot_rscu_boxplot_per_gene(
     output_filepath: str
 ) -> None:
     """
-    Generates a box plot of RSCU value distributions for a specific gene,
-    with codons grouped by amino acid on the x-axis. Highlights x-axis labels
-    for codons with highest (red) / lowest (blue) MEAN RSCU from agg_rscu_df.
+    Generates a box plot visualizing the distribution of RSCU values for each codon
+    within a specific gene. Codons are grouped by their corresponding amino acid on the x-axis.
+    The x-axis labels for codons are colored to highlight those with the highest (red)
+    and lowest (blue) mean RSCU values within their synonymous family, based on aggregate data.
 
     Args:
-        long_rscu_df (pd.DataFrame): Long format RSCU data (SeqID, Codon, RSCU, AminoAcid, Gene).
-        agg_rscu_df (pd.DataFrame): Aggregate RSCU data for label coloring (Codon, AminoAcid, RSCU mean).
-        gene_name (str): Name of the gene (for title and filename).
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format. Default 'svg'.
+        long_rscu_df (pd.DataFrame): DataFrame containing RSCU values in a "long" format,
+                                     typically with columns like 'SeqID', 'Codon', 'RSCU',
+                                     'AminoAcid', and 'Gene'. This is used for the boxplot distributions.
+        agg_rscu_df (pd.DataFrame): DataFrame containing aggregate (mean) RSCU values per codon.
+                                     Must include 'Codon', 'AminoAcid', and 'RSCU' columns.
+                                     This data is used to determine the coloring of x-axis labels.
+        gene_name (str): The name of the gene for which the plot is being generated.
+                         Used in the plot title and logging.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/gene_X_rscu_boxplot.svg').
     """
     long_req_cols = ['Codon', 'AminoAcid', 'RSCU']
     agg_req_cols = ['Codon', 'AminoAcid', 'RSCU']
@@ -1390,62 +1483,64 @@ def plot_rscu_boxplot_per_gene(
              return
 
         # Prepare aggregate data for label coloring (use color_ref_data)
+        # This logic identifies the most and least preferred codons within each synonymous family
+        # based on their aggregate RSCU values, to color the x-axis labels.
         codon_colors: Dict[str, str] = {}
         if not color_ref_data.empty:
-             color_ref_data = color_ref_data.dropna(subset=['RSCU', 'AminoAcid']).copy()
-             color_ref_data = color_ref_data[color_ref_data['AminoAcid'] != '*']
-             color_ref_data['RSCU'] = pd.to_numeric(color_ref_data['RSCU'], errors='coerce')
-             color_ref_data.dropna(subset=['RSCU'], inplace=True)
+            color_ref_data = color_ref_data.dropna(subset=['RSCU', 'AminoAcid']).copy()
+            color_ref_data = color_ref_data[color_ref_data['AminoAcid'] != '*'] # Exclude stop codons from coloring logic
+            color_ref_data['RSCU'] = pd.to_numeric(color_ref_data['RSCU'], errors='coerce')
+            color_ref_data.dropna(subset=['RSCU'], inplace=True)
 
-             if not color_ref_data.empty:
-                # Identify preferred/least preferred based on MEAN RSCU
+            if not color_ref_data.empty:
+                # Group by AminoAcid to find max/min RSCU within each synonymous family
                 aa_groups_for_color = color_ref_data.groupby('AminoAcid')
                 for aa, group in aa_groups_for_color:
-                    if len(group) > 1 and group['RSCU'].notna().any():
+                    if len(group) > 1 and group['RSCU'].notna().any(): # Only if multiple codons and valid RSCU
                         max_rscu = group['RSCU'].max()
                         min_rscu = group['RSCU'].min()
-                        if not np.isclose(max_rscu, min_rscu):
+                        if not np.isclose(max_rscu, min_rscu): # Only color if there's variation
                             for _, row in group.iterrows():
                                 codon, rscu_val = row['Codon'], row['RSCU']
                                 if pd.notna(rscu_val):
-                                     if np.isclose(rscu_val, max_rscu): codon_colors[codon] = 'red'
-                                     elif np.isclose(rscu_val, min_rscu): codon_colors[codon] = 'blue'
-                                     else: codon_colors[codon] = 'black'
-                                else: codon_colors[codon] = 'black'
-                        else: # All values same or only one value
+                                    if np.isclose(rscu_val, max_rscu): codon_colors[codon] = 'red' # Most preferred
+                                    elif np.isclose(rscu_val, min_rscu): codon_colors[codon] = 'blue' # Least preferred
+                                    else: codon_colors[codon] = 'black' # Others
+                                else: codon_colors[codon] = 'black' # Fallback for NaN RSCU
+                        else: # All values are the same or only one codon for this AA
                             for codon in group['Codon']: codon_colors[codon] = 'black'
-                    else: # Single codon or no valid RSCU
+                    else: # Single codon or no valid RSCU for this AA
                         for codon in group['Codon']: codon_colors[codon] = 'black'
-             else: logger.debug(f"No valid aggregate data for label coloring for '{gene_name}'.")
-        # else: logger.debug("Aggregate data was empty/invalid, skipping label coloring.")
+            else:
+                logger.debug(f"No valid aggregate data for label coloring for '{gene_name}'.")
 
 
-        # Get AA codes and sort plot_data for axis order
+        # Get AA codes and sort plot_data for consistent axis order
         plot_data['AA3'] = plot_data['AminoAcid'].map(AA_1_TO_3)
-        # Ensure consistent AA ordering using the predefined AA_ORDER
+        # Ensure consistent Amino Acid ordering using the predefined AA_ORDER
         plot_data['AminoAcid'] = pd.Categorical(plot_data['AminoAcid'], categories=AA_ORDER, ordered=True)
         plot_data.sort_values(by=['AminoAcid', 'Codon'], inplace=True)
-        # Determine the order of codons for the x-axis based on the sorted data
+        # Determine the final order of codons for the x-axis based on the sorted data
         codon_order: List[str] = plot_data['Codon'].unique().tolist()
 
-        # Calculate bounds for separator lines and AA labels based on codon_order
+        # Calculate bounds for vertical separator lines and positions for AA labels
         aa_group_bounds: Dict[str, Dict[str, Union[float, int]]] = {}
         current_aa: Optional[str] = None
-        # Create a mapping from sorted unique codons back to their amino acid
+        # Create a temporary mapping from sorted unique codons back to their amino acid
         temp_aa_map = plot_data.drop_duplicates(subset=['Codon'])[['Codon', 'AminoAcid']].set_index('Codon')['AminoAcid']
         for i, codon in enumerate(codon_order):
             aa = temp_aa_map.get(codon)
             if aa is None: continue # Should not happen if codon_order comes from plot_data
-            aa = str(aa) # Ensure string key
+            aa = str(aa) # Ensure string key for dictionary
             if aa != current_aa:
-                 if current_aa is not None and current_aa in aa_group_bounds:
-                     aa_group_bounds[current_aa]['end'] = i - 0.5
-                     aa_group_bounds[current_aa]['mid'] = (aa_group_bounds[current_aa]['start_idx'] + i - 1) / 2
-                 current_aa = aa
-                 if current_aa not in aa_group_bounds: aa_group_bounds[current_aa] = {}
-                 aa_group_bounds[current_aa]['start'] = i - 0.5
-                 aa_group_bounds[current_aa]['start_idx'] = i
-        # Final group bounds
+                if current_aa is not None and current_aa in aa_group_bounds:
+                    aa_group_bounds[current_aa]['end'] = i - 0.5 # End of previous AA group
+                    aa_group_bounds[current_aa]['mid'] = (aa_group_bounds[current_aa]['start_idx'] + i - 1) / 2 # Midpoint for label
+                current_aa = aa
+                if current_aa not in aa_group_bounds: aa_group_bounds[current_aa] = {}
+                aa_group_bounds[current_aa]['start'] = i - 0.5 # Start of current AA group
+                aa_group_bounds[current_aa]['start_idx'] = i # Index of first codon in group
+        # Finalize the last group's bounds
         if current_aa is not None and current_aa in aa_group_bounds and 'start_idx' in aa_group_bounds[current_aa]:
             aa_group_bounds[current_aa]['end'] = len(codon_order) - 0.5
             aa_group_bounds[current_aa]['mid'] = (aa_group_bounds[current_aa]['start_idx'] + len(codon_order) - 1) / 2
@@ -1454,20 +1549,20 @@ def plot_rscu_boxplot_per_gene(
         # --- Plotting ---
         fig, ax1 = plt.subplots(figsize=(18, 7))
 
-        # Box plot for RSCU distributions
+        # Box plot for RSCU distributions per codon
         sns.boxplot(
             data=plot_data, x='Codon', y='RSCU', order=codon_order, ax=ax1,
             palette="vlag", fliersize=2, linewidth=0.8, showmeans=False,
-            hue='Codon', legend=False # Use hue to map colors but disable its legend
+            hue='Codon', legend=False # Use hue to map colors to individual codons but disable its legend
             )
 
         # Set primary X-axis ticks and labels (Codons)
         ax1.set_xticks(np.arange(len(codon_order)))
         ax1.set_xticklabels(codon_order, rotation=90, fontsize=8)
 
-        # Color the tick labels using codon_colors from aggregate data
+        # Color the codon tick labels based on preferred/least preferred status
         for ticklabel, codon in zip(ax1.get_xticklabels(), codon_order):
-            ticklabel.set_color(codon_colors.get(codon, 'black')) # Default to black
+            ticklabel.set_color(codon_colors.get(codon, 'black')) # Default to black if no specific color
 
         ax1.set_ylabel('RSCU Value Distribution', fontsize=12)
         ax1.set_xlabel('Codon', fontsize=12)
@@ -1477,38 +1572,39 @@ def plot_rscu_boxplot_per_gene(
         ax1.set_ylim(bottom=max(0, plot_data['RSCU'].min() - 0.1)) # Adjust bottom limit slightly below min if needed
         ax1.tick_params(axis='x', which='major', pad=1)
 
-        # Add vertical separator lines between AA groups
+        # Add vertical separator lines between Amino Acid groups
         valid_bounds = [b for b in aa_group_bounds.values() if 'start' in b]
         for bounds in valid_bounds:
-             if bounds['start'] > -0.5: ax1.axvline(x=bounds['start'], color='grey', linestyle=':', linewidth=1.2)
-        ax1.axvline(x=len(codon_order) - 0.5, color='grey', linestyle=':', linewidth=1.2) # Final line
+            if bounds['start'] > -0.5: ax1.axvline(x=bounds['start'], color='grey', linestyle=':', linewidth=1.2)
+        ax1.axvline(x=len(codon_order) - 0.5, color='grey', linestyle=':', linewidth=1.2) # Final line at the end of the last group
 
 
-        # Add centered AA labels using a secondary axis
-        ax2: Axes = ax1.twiny() # Create secondary axis sharing y
-        ax2.set_xlim(ax1.get_xlim())
+        # Add centered Amino Acid labels using a secondary x-axis (twiny)
+        ax2: Axes = ax1.twiny() # Create secondary axis sharing the y-axis
+        ax2.set_xlim(ax1.get_xlim()) # Ensure secondary axis has same x-limits as primary
         aa_ticks: List[float] = []
         aa_labels_3_letter: List[str] = []
-        # Ensure AAs are added in the canonical order (AA_ORDER)
+        # Ensure AAs are added in the canonical order (AA_ORDER) for consistent display
         sorted_aa_keys = sorted(aa_group_bounds.keys(), key=lambda aa: AA_ORDER.index(aa) if aa in AA_ORDER else float('inf'))
         for aa_1_letter in sorted_aa_keys:
             bounds = aa_group_bounds[aa_1_letter]
             if aa_1_letter in AA_1_TO_3 and 'mid' in bounds and pd.notna(bounds['mid']):
-                aa_ticks.append(float(bounds['mid'])) # Ensure float
-                aa_labels_3_letter.append(AA_1_TO_3[aa_1_letter])
+                aa_ticks.append(float(bounds['mid'])) # Position the tick at the midpoint of the AA group
+                aa_labels_3_letter.append(AA_1_TO_3[aa_1_letter]) # Use 3-letter AA code for label
 
         if aa_ticks and aa_labels_3_letter:
-             ax2.set_xticks(aa_ticks)
-             ax2.set_xticklabels(aa_labels_3_letter, fontsize=10, fontweight='bold')
-        else:
-             ax2.set_xticks([])
-             ax2.set_xticklabels([])
+            ax2.set_xticks(aa_ticks)
+            ax2.set_xticklabels(aa_labels_3_letter, fontsize=10, fontweight='bold')
+        else: # If no AA ticks/labels, hide them
+            ax2.set_xticks([])
+            ax2.set_xticklabels([])
 
-        # Style the secondary axis
+        # Style the secondary axis to be clean (no ticks, no spines)
         ax2.tick_params(axis='x', which='both', length=0, top=False, labeltop=True)
         for spine in ax2.spines.values(): spine.set_visible(False)
 
-        plt.tight_layout(rect=[0, 0.03, 1, 0.97]) # Adjust layout slightly
+        # Adjust layout to prevent labels/titles from overlapping
+        plt.tight_layout(rect=[0, 0.03, 1, 0.97]) # Adjust layout slightly to make space for top labels
 
         # Save the plot
         output_path_obj = Path(output_filepath)
@@ -1532,14 +1628,19 @@ def plot_correlation_heatmap(
     method: str = 'spearman'
 ) -> None:
     """
-    Generates a heatmap of the correlation matrix for selected features.
+    Generates a heatmap of the correlation matrix for a specified list of features
+    within a DataFrame. This visualizes the pairwise relationships between features.
 
     Args:
-        df (pd.DataFrame): DataFrame containing the features.
-        features (List[str]): List of column names to include in the correlation.
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format.
-        method (str): Correlation method ('spearman' or 'pearson'). Default 'spearman'.
+        df (pd.DataFrame): The input DataFrame containing the features for which
+                           correlations are to be calculated.
+        features (List[str]): A list of column names (features) from the DataFrame
+                              to include in the correlation matrix.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/feature_correlation_heatmap.svg').
+        method (str): The correlation method to use. Can be 'spearman' (Spearman's rank
+                      correlation) or 'pearson' (Pearson's linear correlation).
+                      Defaults to 'spearman'.
     """
     if df is None or df.empty:
          logger.warning("Input DataFrame is empty. Cannot plot correlation heatmap.")
@@ -1603,33 +1704,43 @@ def plot_correlation_heatmap(
         if fig is not None: plt.close(fig)
 
 def plot_ca_axes_feature_correlation(
-    ca_dims_df: pd.DataFrame, # DataFrame with CA_Dim1, CA_Dim2, index should be gene__sequenceID
-    metrics_df: pd.DataFrame, # DataFrame with metrics, index should be gene__sequenceID
-    rscu_df: pd.DataFrame,    # DataFrame with RSCU values, index should be gene__sequenceID
+    ca_dims_df: pd.DataFrame,
+    metrics_df: pd.DataFrame,
+    rscu_df: pd.DataFrame,
     output_filepath: str,
     significance_threshold: float = 0.05,
     method_name: str = "Spearman",
-    features_to_correlate: Optional[List[str]] = None # Allow passing specific features
+    features_to_correlate: Optional[List[str]] = None
     ) -> None:
     """
-    Generates a heatmap showing correlations between CA axes (Dim1, Dim2)
-    and other calculated features, highlighting significant correlations.
+    Generates a heatmap showing the correlation coefficients between Correspondence Analysis (CA)
+    axes (e.g., Dim1, Dim2) and other calculated sequence features (metrics and RSCU values).
+    Significant correlations (based on a p-value threshold) are highlighted with an asterisk.
+
+    This plot helps to interpret the biological meaning of the CA dimensions by identifying
+    which sequence properties or codon usage patterns are strongly associated with each axis.
 
     Args:
-        ca_dims_df (pd.DataFrame): DataFrame with CA dimensions (e.g., 'CA_Dim1', 'CA_Dim2')
-                                   as columns and an index matching metrics_df and rscu_df.
-        metrics_df (pd.DataFrame): DataFrame of per-sequence metrics. Must have an index
-                                   that can be aligned with ca_dims_df and rscu_df.
-                                   Expected to contain various feature columns.
-        rscu_df (pd.DataFrame): DataFrame of per-sequence RSCU values (codons as columns).
-                                Must have an index that can be aligned.
-        output_dir (str): Directory to save the plot.
-        file_format (str): Plot file format (e.g., 'png').
-        significance_threshold (float): P-value threshold for highlighting. Default 0.05.
-        method_name (str): Name of the correlation method used (for title). Default 'Spearman'.
-        features_to_correlate (Optional[List[str]]): Specific list of features from metrics_df
-                                                     and rscu_df to correlate against CA axes.
-                                                     If None, sensible defaults are used.
+        ca_dims_df (pd.DataFrame): DataFrame containing the CA dimension coordinates for each
+                                   sequence/gene. Expected columns are 'CA_Dim1', 'CA_Dim2', etc.,
+                                   and its index should uniquely identify sequences/genes
+                                   (e.g., 'gene__sequenceID').
+        metrics_df (pd.DataFrame): DataFrame containing various per-sequence metrics (e.g., GC%, ENC, CAI).
+                                   Its index should align with `ca_dims_df` and `rscu_df`.
+        rscu_df (pd.DataFrame): DataFrame containing per-sequence RSCU values, with codons as columns.
+                                Its index should align with `ca_dims_df` and `metrics_df`.
+        output_filepath (str): Full path (including filename and extension) where the plot
+                               will be saved (e.g., 'plots/ca_feature_correlation_heatmap.svg').
+        significance_threshold (float): The p-value threshold below which a correlation is
+                                        considered statistically significant and marked with an asterisk.
+                                        Defaults to 0.05.
+        method_name (str): The name of the correlation method used (e.g., "Spearman", "Pearson").
+                           This is used in the plot title and for logging. Defaults to "Spearman".
+        features_to_correlate (Optional[List[str]]): A specific list of feature names (column names)
+                                                     from `metrics_df` and `rscu_df` to correlate
+                                                     against the CA axes. If None, a sensible default
+                                                     set of common metrics and all RSCU codons will be used.
+                                                     Defaults to None.
     """
     if ca_dims_df is None or ca_dims_df.empty:
         logger.warning("CA dimensions DataFrame is missing or empty. Cannot plot CA-Feature correlation.")
@@ -1658,38 +1769,33 @@ def plot_ca_axes_feature_correlation(
         # --- Merge DataFrames robustly ---
         logger.debug(f"Initial shapes: CA_dims({ca_dims_df.shape}), Metrics({metrics_df.shape}), RSCU({rscu_df.shape})")
 
-        # Find common indices across all three DataFrames
+        # Find common indices across all three DataFrames to ensure data alignment
         common_index = ca_dims_df.index.intersection(metrics_df.index).intersection(rscu_df.index)
 
         if common_index.empty:
             logger.error("No common indices found between CA dimensions, metrics, and RSCU DataFrames. Cannot merge for correlation plot.")
             return
-        
+
         logger.info(f"Found {len(common_index)} common entries for merging CA dimensions, metrics, and RSCU data.")
 
-        # Align all DataFrames to the common index before merging
+        # Align all DataFrames to the common index before concatenating
         ca_dims_aligned = ca_dims_df.loc[common_index]
         metrics_aligned = metrics_df.loc[common_index]
         rscu_aligned = rscu_df.loc[common_index]
 
-        # Concatenate horizontally (axis=1) as they now share the same index
+        # Concatenate metrics and RSCU data horizontally (axis=1) as they now share the same index.
         # This assumes no overlapping column names between metrics_aligned and rscu_aligned,
-        # except for the CA_dims already being separate.
-        # And CA_dims should not have common names with metrics or RSCU.
-        
-        # Check for column name conflicts before merging metrics_aligned and rscu_aligned
+        # or that any overlaps are handled appropriately (e.g., by pandas' default behavior).
         metric_cols = set(metrics_aligned.columns)
         rscu_cols = set(rscu_aligned.columns)
         overlapping_cols_mr = metric_cols.intersection(rscu_cols)
         if overlapping_cols_mr:
             logger.warning(f"Overlapping columns found between metrics and RSCU data: {overlapping_cols_mr}. These might cause issues or be overwritten during merge.")
-            # Potentially add suffixes or raise error
-            # For now, we'll let pandas handle it (last one wins for overlapping non-index cols)
 
         merged_df_features = pd.concat([metrics_aligned, rscu_aligned], axis=1)
-        
-        # Now merge with CA dimensions
-        # Check for column name conflicts between merged_df_features and ca_dims_aligned
+
+        # Now merge the combined features DataFrame with the CA dimensions DataFrame.
+        # Critical check for column name conflicts between features and CA dimensions.
         features_cols = set(merged_df_features.columns)
         ca_dim_cols = set(ca_dims_aligned.columns)
         overlapping_cols_fc = features_cols.intersection(ca_dim_cols)
@@ -1697,53 +1803,52 @@ def plot_ca_axes_feature_correlation(
              logger.error(f"Critical: Overlapping columns found between features and CA dimensions: {overlapping_cols_fc}. Aborting plot.")
              return
 
-
         merged_df = pd.concat([ca_dims_aligned, merged_df_features], axis=1)
 
         if merged_df.empty:
             logger.error("Merged DataFrame for CA-Feature correlation is empty. This should not happen if common_index was found. Aborting.")
             return
-        
+
         logger.info(f"Successfully merged data for correlation, final shape: {merged_df.shape}")
 
         # --- Define features to correlate ---
         if features_to_correlate is None:
-            # Default features if not provided
+            # If no specific features are provided, use a default set of common metrics and all RSCU codons.
             default_metric_features = ['Length', 'TotalCodons', 'GC', 'GC1', 'GC2', 'GC3', 'GC12',
                                        'ENC', 'CAI', 'Fop', 'RCDI', 'ProteinLength', 'GRAVY', 'Aromaticity']
-            # Filter for those actually present in the merged_df
+            # Filter default metrics to include only those actually present in the merged DataFrame
             available_metric_features = [f for f in default_metric_features if f in merged_df.columns]
-            # Get all RSCU columns (typically 3-letter uppercase codons)
+            # Identify all RSCU columns (assumed to be 3-letter uppercase codons) from the aligned RSCU data
             available_rscu_columns = sorted([col for col in rscu_aligned.columns if len(col) == 3 and col.isupper()])
             features_to_correlate = available_metric_features + available_rscu_columns
         else:
-            # If a list is provided, filter it to ensure all features exist in the merged_df
+            # If a list is provided, filter it to ensure all requested features exist in the merged DataFrame.
             original_feature_count = len(features_to_correlate)
             features_to_correlate = [f for f in features_to_correlate if f in merged_df.columns]
             if len(features_to_correlate) < original_feature_count:
                 logger.warning("Some requested features for correlation were not found in the merged data and were skipped.")
-        
+
         if not features_to_correlate:
             logger.error("No valid features selected or available for CA-Feature correlation. Aborting plot.")
             return
 
-        # CA dimension columns (assuming they are the first columns from ca_dims_aligned)
+        # Identify CA dimension columns (assuming they are the columns from ca_dims_aligned)
         ca_dim_column_names = list(ca_dims_aligned.columns)
         if not ca_dim_column_names:
             logger.error("No CA dimension columns found in ca_dims_df. Aborting plot.")
             return
 
-        # --- Calculate Correlations ---
+        # --- Calculate Correlations (coefficients and p-values) ---
         logger.info(f"Calculating {method_name} correlations for {len(ca_dim_column_names)} CA Axes vs {len(features_to_correlate)} features...")
         all_corr_coeffs: Dict[str, Dict[str, float]] = {}
         all_p_values: Dict[str, Dict[str, float]] = {}
 
-        if not SCIPY_AVAILABLE: # Assuming SCIPY_AVAILABLE is defined globally or passed
+        if not SCIPY_AVAILABLE: # Check if SciPy library is available for p-value calculation
             logger.warning(f"Scipy not installed. Cannot calculate p-values for {method_name} correlations. Heatmap will show coefficients only.")
-            # Fallback to pandas correlation for all CA dims vs all features
+            # Fallback: calculate correlations using pandas if scipy is not available
             corr_matrix_full = merged_df[ca_dim_column_names + features_to_correlate].corr(method=method_name.lower())
             corr_matrix_subset = corr_matrix_full.loc[ca_dim_column_names, features_to_correlate]
-            pval_matrix_subset = pd.DataFrame(np.nan, index=corr_matrix_subset.index, columns=corr_matrix_subset.columns)
+            pval_matrix_subset = pd.DataFrame(np.nan, index=corr_matrix_subset.index, columns=corr_matrix_subset.columns) # P-values will be NaN
         else:
             for ca_dim_col in ca_dim_column_names:
                 all_corr_coeffs[ca_dim_col] = {}
@@ -1751,14 +1856,17 @@ def plot_ca_axes_feature_correlation(
                 ca_dim_data = merged_df[ca_dim_col]
                 for feature in features_to_correlate:
                     feature_data = merged_df[feature]
+                    # Identify common non-NaN data points for correlation calculation
                     common_mask = ca_dim_data.notna() & feature_data.notna()
                     n_common = common_mask.sum()
 
+                    # Skip correlation if insufficient data points or no variation
                     if n_common < 3 or feature_data[common_mask].nunique() <= 1 or ca_dim_data[common_mask].nunique() <= 1 :
                         all_corr_coeffs[ca_dim_col][feature] = np.nan
                         all_p_values[ca_dim_col][feature] = np.nan
                         continue
                     try:
+                        # Perform correlation calculation based on the specified method
                         if method_name.lower() == 'spearman':
                             corr, pval = scipy_stats_module.spearmanr(ca_dim_data[common_mask], feature_data[common_mask])
                         elif method_name.lower() == 'pearson':
@@ -1772,10 +1880,11 @@ def plot_ca_axes_feature_correlation(
                         logger.warning(f"Could not calculate {method_name} correlation for {ca_dim_col} vs '{feature}': {spe_err}")
                         all_corr_coeffs[ca_dim_col][feature] = np.nan
                         all_p_values[ca_dim_col][feature] = np.nan
-            
+
+            # Convert dictionaries of correlations and p-values to DataFrames
             corr_matrix_subset = pd.DataFrame.from_dict(all_corr_coeffs, orient='index')
             pval_matrix_subset = pd.DataFrame.from_dict(all_p_values, orient='index')
-            # Reorder columns to match features_to_correlate if necessary
+            # Reorder columns to match the desired features_to_correlate order
             if not corr_matrix_subset.empty:
                 corr_matrix_subset = corr_matrix_subset.reindex(columns=features_to_correlate)
             if not pval_matrix_subset.empty:
@@ -1787,35 +1896,35 @@ def plot_ca_axes_feature_correlation(
             return
 
         # --- Plotting ---
-        # Ensure figure size calculation uses corr_matrix_subset
+        # Dynamically adjust figure size based on the number of features to plot
         n_features_plot = len(corr_matrix_subset.columns)
         fig_height = max(4, len(corr_matrix_subset.index) * 0.8)
         fig_width = max(10, n_features_plot * 0.4)
-        fig_width = min(fig_width, 45)
+        fig_width = min(fig_width, 45) # Cap max width to prevent excessively large figures
 
         fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
+        # Create annotation data: add '*' for significant correlations
         annot_mask = pval_matrix_subset < significance_threshold
         annot_data = np.where(
             annot_mask,
-            corr_matrix_subset.round(2).astype(str) + "*",
-            # For non-significant, show value if you want, or ""
-            # corr_matrix_subset.round(2).astype(str) # To show all values
-            "" # To show only significant values
+            corr_matrix_subset.round(2).astype(str) + "*", # Add '*' for significant values
+            "" # Show empty string for non-significant values
         )
 
+        # Define a diverging color palette for correlations
         cmap = sns.diverging_palette(240, 10, s=99, l=50, as_cmap=True)
 
         sns.heatmap(
-            corr_matrix_subset, # Use the correctly ordered subset
-            annot=annot_data,
-            fmt="",
+            corr_matrix_subset, # Use the correctly ordered subset of correlation coefficients
+            annot=annot_data, # Use the custom annotation data
+            fmt="", # Format as string since annot_data is already formatted
             cmap=cmap,
             linewidths=.5,
             linecolor='lightgray',
             cbar=True,
-            center=0,
-            vmin=-1, vmax=1,
+            center=0, # Center the colormap at 0 for correlations
+            vmin=-1, vmax=1, # Ensure full range for correlation coefficients
             annot_kws={"size": 7},
             cbar_kws={'label': f'{method_name} Correlation Coefficient', 'shrink': 0.7},
             ax=ax
@@ -1824,11 +1933,13 @@ def plot_ca_axes_feature_correlation(
         ax.set_title(f'{method_name} Correlation: CA Axes vs Features (p < {significance_threshold} marked with *)', fontsize=14)
         ax.set_xlabel("Features", fontsize=12)
         ax.set_ylabel("CA Axes", fontsize=12)
-        
-        xtick_fontsize = 8 if n_features_plot < 50 else (6 if n_features_plot < 80 else 5)
-        plt.xticks(rotation=90, ha='right', fontsize=xtick_fontsize) # ha='right' for better alignment
-        plt.yticks(rotation=0, fontsize=10)
 
+        # Adjust x-tick label font size based on number of features to prevent overlap
+        xtick_fontsize = 8 if n_features_plot < 50 else (6 if n_features_plot < 80 else 5)
+        plt.xticks(rotation=90, ha='right', fontsize=xtick_fontsize) # Rotate for readability
+        plt.yticks(rotation=0, fontsize=10) # Keep y-ticks horizontal
+
+        # Adjust layout to prevent elements from being cut off, especially with rotated labels
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
         output_path_obj = Path(output_filepath)
