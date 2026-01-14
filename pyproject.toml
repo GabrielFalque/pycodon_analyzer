@@ -58,8 +58,6 @@ dev = [
     "mypy",
     "ruff",
 ]
-
-[project.optional-dependencies]
 report = [
     "jinja2>=3.0",
 ]
