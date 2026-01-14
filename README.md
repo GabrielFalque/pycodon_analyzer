@@ -71,6 +71,7 @@ The tool leverages multiprocessing for faster analysis and uses Python's standar
    * `mean_features_per_gene.csv`: Average values for key metrics per gene.
    * `gene_sequence_summary.csv`: Summary of sequence counts and lengths per gene.
    * `per_sequence_rscu_wide.csv`: RSCU value for every codon for every sequence (input for combined CA).
+   * `per_sequence_dinucleotide_analysis.csv`: Detailed dinucleotide analysis for each sequence (including concatenated 'complete' sequences). Contains 16 frequency columns (`freq_XX`) and 16 relative abundance columns (`abund_XX`, Observed/Expected ratios) in a wide format, ideal for multivariate statistics.
    * `gene_comparison_stats.csv`: Results of statistical tests between genes.
    * `ca_row_coordinates.csv`, `ca_col_coordinates.csv`, `ca_col_contributions.csv`, `ca_eigenvalues.csv`: Detailed results from the **combined CA**.
    * `ca_axes_vs_metadata_correlation.csv`: (If implemented) Correlations between CA axes and numerical metadata.

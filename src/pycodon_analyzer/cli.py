@@ -991,6 +991,58 @@ def _finalize_and_save_per_sequence_metrics(
     except Exception as e: # pragma: no cover (should be rare with checks)
         logger.exception(f"Error concatenating or saving combined per-sequence results: {e}")
         return None
+    
+def _generate_per_sequence_dinucleotide_wide(
+    all_nucl_per_seq: Dict[str, Dict[str, Dict[str, float]]],
+    all_dinucl_per_seq: Dict[str, Dict[str, Dict[str, float]]]
+) -> pd.DataFrame:
+    """
+    Generates a wide-format DataFrame containing nucleotide frequencies and 
+    relative abundances (O/E ratios) for each sequence across all genes.
+
+    The resulting DataFrame follows a 'one row per sequence per gene' structure, 
+    making it ideal for multivariate statistical analysis.
+
+    Args:
+        all_nucl_per_seq: Nested dictionary {gene_name: {seq_id: {nucleotide: frequency}}}.
+        all_dinucl_per_seq: Nested dictionary {gene_name: {seq_id: {dinucleotide: frequency}}}.
+
+    Returns:
+        pd.DataFrame: A wide DataFrame with columns for ID, Gene, Original_ID, 
+                      followed by 16 frequency columns (freq_XX) and 16 
+                      abundance columns (abund_XX).
+    """
+    rows = []
+    # Standard 16 dinucleotides based on ATCG
+    bases = ['A', 'C', 'G', 'T']
+    dinucleotides = [d1 + d2 for d1 in bases for d2 in bases]
+
+    logger.info("Building wide-format per-sequence dinucleotide analysis table...")
+
+    for gene_name, sequences in all_dinucl_per_seq.items():
+        for seq_id, dinucl_freqs in sequences.items():
+            # Retrieve corresponding nucleotide frequencies to calculate O/E ratios
+            nucl_freqs = all_nucl_per_seq.get(gene_name, {}).get(seq_id)
+            
+            if nucl_freqs:
+                # Calculate Observed/Expected ratios using core analysis function
+                oe_ratios = analysis.calculate_relative_dinucleotide_abundance(nucl_freqs, dinucl_freqs)
+                
+                # Initialize the row with primary identifiers
+                row = {
+                    'ID': f"{gene_name}__{seq_id}",
+                    'Gene': gene_name,
+                    'Original_ID': seq_id
+                }
+                
+                # Populate frequency and abundance columns for all 16 dinucleotides
+                for dn in dinucleotides:
+                    row[f'freq_{dn}'] = dinucl_freqs.get(dn, 0.0)
+                    row[f'abund_{dn}'] = oe_ratios.get(dn, np.nan)
+                
+                rows.append(row)
+
+    return pd.DataFrame(rows)
 
 
 def _generate_summary_tables_and_stats(
@@ -1871,6 +1923,17 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
         all_nucl_freqs_by_gene_agg, all_dinucl_freqs_by_gene_agg
     )
 
+    # 12.5. Generate and save the per-sequence wide dinucleotide analysis table
+    per_seq_dinucl_wide_df = _generate_per_sequence_dinucleotide_wide(
+        all_nucl_freqs_per_seq_in_gene,
+        all_dinucl_freqs_per_seq_in_gene
+    )
+    
+    if not per_seq_dinucl_wide_df.empty:
+        dinucl_wide_path = output_dir_path / "data" / "per_sequence_dinucleotide_analysis.csv"
+        per_seq_dinucl_wide_df.to_csv(dinucl_wide_path, index=False, float_format='%.5f')
+        logger.info(f"Per-sequence dinucleotide analysis (wide) saved to: {dinucl_wide_path}")
+
     # 13. Perform Combined Correspondence Analysis (CA) and Save Output Tables
     (combined_ca_input_df_final, ca_results_combined,
      gene_groups_for_ca_plotting, ca_row_coords_final
@@ -1954,6 +2017,11 @@ def handle_analyze_command(args: argparse.Namespace) -> None:
                                  table_csv_path_relative_to_outdir="data/mean_features_per_gene.csv" if mean_summary_df is not None else None)
             report_gen.add_table("gene_comparison_stats", comparison_results_df,
                                  table_csv_path_relative_to_outdir="data/gene_comparison_stats.csv" if comparison_results_df is not None else None)
+            report_gen.add_table(
+                "per_sequence_dinucleotide_analysis", per_seq_dinucl_wide_df,
+                table_csv_path_relative_to_outdir="data/per_sequence_dinucleotide_analysis.csv",
+                display_in_html=False # Too wide for direct HTML display
+            )
 
             # CA related tables
             ca_performed_for_report = ca_results_combined is not None and combined_ca_input_df_final is not None
